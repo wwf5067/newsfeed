@@ -29,8 +29,21 @@ $(. /etc/os-release && echo "$VERSION_CODENAME") stable" \
   sudo apt-get install -y docker-ce docker-ce-cli containerd.io \
     docker-buildx-plugin docker-compose-plugin
 
+  # 国内服务器拉 docker.io 镜像也常常超时,配置镜像加速
+  sudo mkdir -p /etc/docker
+  sudo tee /etc/docker/daemon.json > /dev/null <<'JSON'
+{
+  "registry-mirrors": [
+    "https://mirror.ccs.tencentyun.com",
+    "https://docker.m.daocloud.io",
+    "https://dockerproxy.com"
+  ]
+}
+JSON
+
   sudo usermod -aG docker "$USER"
   sudo systemctl enable --now docker
+  sudo systemctl restart docker
   echo ">> Docker installed. NOTE: 你需要重新 SSH 登录一次,'docker' 命令才不需要 sudo。"
 fi
 
