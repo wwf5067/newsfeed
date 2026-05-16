@@ -70,6 +70,7 @@ services:
       ZHIHU_COOKIE: ${ZHIHU_COOKIE}
       ZHIHU_SCHEDULE: ${ZHIHU_SCHEDULE:-0 */30 * * * *}
       RUN_ON_START: ${RUN_ON_START:-false}
+      RETENTION_DAYS: ${RETENTION_DAYS:-30}
     depends_on:
       postgres:
         condition: service_healthy

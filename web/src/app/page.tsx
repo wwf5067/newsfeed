@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 
 type Article = {
   id: number;
@@ -18,6 +18,9 @@ type ListResp = {
   limit: number;
   offset: number;
 };
+
+// 自动刷新间隔:5 分钟
+const POLL_INTERVAL_MS = 5 * 60 * 1000;
 
 // 静态导出时不能用 SSR,所以走 client fetch。
 // 开发环境由 next.config rewrites 代理到 localhost:8080,
@@ -38,25 +41,65 @@ function formatTime(iso: string): string {
   }
 }
 
+function formatRelativeTime(date: Date): string {
+  const now = new Date();
+  const diffSec = Math.floor((now.getTime() - date.getTime()) / 1000);
+  if (diffSec < 60) return "刚刚";
+  if (diffSec < 3600) return `${Math.floor(diffSec / 60)} 分钟前`;
+  return formatTime(date.toISOString());
+}
+
 export default function Home() {
   const [articles, setArticles] = useState<Article[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  const [, setTick] = useState(0); // 用于触发 formatRelativeTime 重渲染
+  const initialLoad = useRef(true);
+
+  const refresh = useCallback(async () => {
+    try {
+      const items = await fetchArticles();
+      setArticles(items);
+      setLastUpdated(new Date());
+      setError(null);
+    } catch (e) {
+      // 仅在首次加载时展示错误,后续静默失败保留旧数据
+      if (initialLoad.current) {
+        setError(String(e));
+      }
+    } finally {
+      if (initialLoad.current) {
+        setLoading(false);
+        initialLoad.current = false;
+      }
+    }
+  }, []);
 
   useEffect(() => {
-    fetchArticles()
-      .then((items) => setArticles(items))
-      .catch((e) => setError(String(e)))
-      .finally(() => setLoading(false));
+    refresh();
+    const timer = setInterval(refresh, POLL_INTERVAL_MS);
+    return () => clearInterval(timer);
+  }, [refresh]);
+
+  // 每 30 秒更新一次"最后更新"的相对时间显示
+  useEffect(() => {
+    const timer = setInterval(() => setTick((t) => t + 1), 30_000);
+    return () => clearInterval(timer);
   }, []);
 
   return (
     <main className="mx-auto w-full max-w-3xl px-4 py-8">
       <header className="mb-6 flex items-baseline justify-between">
         <h1 className="text-2xl font-semibold tracking-tight">Newsfeed</h1>
-        <span className="text-sm text-zinc-500">
-          {loading ? "加载中…" : `共 ${articles.length} 条`}
-        </span>
+        <div className="flex items-baseline gap-3 text-sm text-zinc-500">
+          {lastUpdated && (
+            <span title={lastUpdated.toLocaleString("zh-CN", { hour12: false })}>
+              {formatRelativeTime(lastUpdated)}更新
+            </span>
+          )}
+          <span>{loading ? "加载中…" : `共 ${articles.length} 条`}</span>
+        </div>
       </header>
 
       {error && (

@@ -17,24 +17,37 @@ func NewRepository(pool *pgxpool.Pool) *Repository {
 	return &Repository{pool: pool}
 }
 
-// UpsertArticle 按 url 唯一约束去重写入。返回是否新插入。
+// UpsertArticle 按 url 唯一约束去重写入。
+// 若 url 已存在,更新 title/content/author/published_at/fetched_at。
+// 返回值 inserted=true 表示新插入,false 表示更新已有记录。
 func (r *Repository) UpsertArticle(ctx context.Context, a model.Article) (inserted bool, err error) {
 	const q = `
 INSERT INTO articles (source_key, url, title, content, author, published_at, fetched_at)
 VALUES ($1, $2, $3, $4, $5, $6, NOW())
-ON CONFLICT (url) DO NOTHING
-RETURNING id
+ON CONFLICT (url) DO UPDATE SET
+    title        = EXCLUDED.title,
+    content      = EXCLUDED.content,
+    author       = EXCLUDED.author,
+    published_at = EXCLUDED.published_at,
+    fetched_at   = NOW()
+RETURNING (xmax = 0) AS is_new
 `
-	var id int64
+	var isNew bool
 	err = r.pool.QueryRow(ctx, q,
 		a.SourceKey, a.URL, a.Title, a.Content, a.Author, a.PublishedAt,
-	).Scan(&id)
+	).Scan(&isNew)
 	if err != nil {
-		// pgx: ON CONFLICT DO NOTHING + 命中冲突时,QueryRow 返回 ErrNoRows
-		if err.Error() == "no rows in result set" {
-			return false, nil
-		}
 		return false, err
 	}
-	return true, nil
+	return isNew, nil
+}
+
+// PurgeOldArticles 删除 fetched_at 早于 days 天前的文章,返回被删除的行数。
+func (r *Repository) PurgeOldArticles(ctx context.Context, days int) (int64, error) {
+	const q = `DELETE FROM articles WHERE fetched_at < NOW() - INTERVAL '1 day' * $1`
+	tag, err := r.pool.Exec(ctx, q, days)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
 }

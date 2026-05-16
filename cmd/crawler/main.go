@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"os"
@@ -34,7 +35,7 @@ func main() {
 	defer pool.Close()
 
 	repo := crawler.NewRepository(pool)
-	runner := crawler.NewRunner(log, repo)
+	runner := crawler.NewRunner(log, repo, cfg.RetentionDays)
 
 	// 显式注册数据源。新增源 = 在这里加一行。
 	// 没配置必需凭据的源会被跳过,不影响其它源运行。
@@ -56,20 +57,47 @@ func main() {
 	}
 
 	runner.Start()
-	log.Info("crawler started")
+	log.Info("crawler started", "retention_days", cfg.RetentionDays)
 
 	if cfg.RunOnStart && registered > 0 {
 		log.Info("RUN_ON_START=true, executing all sources now")
 		go runner.RunAllNow()
 	}
 
+	// 启动时执行一次过期清理
+	if cfg.RetentionDays > 0 {
+		go runner.PurgeNow()
+	}
+
 	// 内部 health 端点,仅监听 127.0.0.1
-	healthSrv := &http.Server{
-		Addr: cfg.CrawlerAddr,
-		Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	healthMux := http.NewServeMux()
+	healthMux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
+		sourceHealth := runner.Health()
+
+		status := "ok"
+		for _, h := range sourceHealth {
+			if h.ConsecutiveFailures >= 3 {
+				status = "degraded"
+				break
+			}
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		if status == "degraded" {
+			w.WriteHeader(http.StatusServiceUnavailable) // 503
+		} else {
 			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(`{"status":"ok"}`))
-		}),
+		}
+
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"status":  status,
+			"sources": sourceHealth,
+		})
+	})
+
+	healthSrv := &http.Server{
+		Addr:              cfg.CrawlerAddr,
+		Handler:           healthMux,
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	go func() {

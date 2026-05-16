@@ -32,6 +32,9 @@ type Config struct {
 
 	// 调试开关:启动时立即执行一次所有源(不等 cron 触发)
 	RunOnStart bool
+
+	// 数据保留天数,超过此天数的文章将被自动清理(基于 fetched_at)
+	RetentionDays int
 }
 
 // Load 从环境变量读取配置。缺失必填项会返回错误。
@@ -47,6 +50,7 @@ func Load() (*Config, error) {
 		ZhihuCookie:     os.Getenv("ZHIHU_COOKIE"),
 		ZhihuSchedule:   getEnv("ZHIHU_SCHEDULE", "0 */30 * * * *"),
 		RunOnStart:      strings.EqualFold(os.Getenv("RUN_ON_START"), "true"),
+		RetentionDays:   getEnvInt("RETENTION_DAYS", 30),
 	}
 
 	if cfg.DatabaseURL == "" {
@@ -74,6 +78,17 @@ func getEnvDuration(key string, fallback time.Duration) time.Duration {
 	// 兼容纯数字(秒)
 	if n, err := strconv.Atoi(v); err == nil {
 		return time.Duration(n) * time.Second
+	}
+	return fallback
+}
+
+func getEnvInt(key string, fallback int) int {
+	v := os.Getenv(key)
+	if v == "" {
+		return fallback
+	}
+	if n, err := strconv.Atoi(v); err == nil {
+		return n
 	}
 	return fallback
 }
