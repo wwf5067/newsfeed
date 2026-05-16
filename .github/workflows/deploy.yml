@@ -188,5 +188,9 @@ jobs:
           # 应用新迁移(失败则部署失败,避免出现 "表不存在" 这种隐性问题)
           docker compose -f docker-compose.prod.yml --profile migrate run --rm migrate
           docker compose -f docker-compose.prod.yml up -d
+          # web-dist 目录被 deploy 步骤 rm -rf 重建过,inode 变了,
+          # 已运行的 nginx 容器仍持有旧 inode 挂载(幽灵挂载,看到空目录)。
+          # 镜像没变时 `up -d` 不会重启 nginx,这里强制重启刷新 bind mount。
+          docker compose -f docker-compose.prod.yml restart nginx
           docker compose -f docker-compose.prod.yml ps
           REMOTE
