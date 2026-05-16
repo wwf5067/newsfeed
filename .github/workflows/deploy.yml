@@ -185,7 +185,8 @@ jobs:
           # 这里假设镜像是 public,若改为 private 需要在 server 上提前 docker login
 
           docker compose -f docker-compose.prod.yml pull
-          docker compose --profile migrate run --rm migrate || true  # 应用新迁移(若有)
+          # 应用新迁移(失败则部署失败,避免出现 "表不存在" 这种隐性问题)
+          docker compose -f docker-compose.prod.yml --profile migrate run --rm migrate
           docker compose -f docker-compose.prod.yml up -d
           docker compose -f docker-compose.prod.yml ps
           REMOTE
