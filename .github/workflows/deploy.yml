@@ -1,0 +1,191 @@
+# 推 main 时:
+#   1) 跑 Go 测试
+#   2) 构建 api / crawler 镜像并推到 GHCR
+#   3) 构建前端静态产物
+#   4) SSH 到 Lighthouse:同步 deploy/ 配置和前端产物 -> docker compose pull && up
+#
+# 必需的 GitHub Secrets(在仓库 Settings -> Secrets and variables -> Actions 配置):
+#   SSH_HOST       Lighthouse 公网 IP
+#   SSH_USER       SSH 用户名(通常 ubuntu / lighthouse)
+#   SSH_PORT       SSH 端口(默认 22 也可以填)
+#   SSH_KEY        私钥内容(完整 PEM,含 BEGIN/END 行)
+#
+# GHCR 推送用 GITHUB_TOKEN,无需额外配置。
+
+name: deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+env:
+  REGISTRY: ghcr.io
+  # owner 小写,用于镜像 path
+  IMAGE_OWNER: ${{ github.repository_owner }}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+          cache: true
+      - run: go vet ./...
+      - run: go test ./...
+
+  build-images:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image_tag: ${{ steps.meta.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set lowercase image owner
+        id: owner
+        run: echo "lc=${IMAGE_OWNER,,}" >> "$GITHUB_OUTPUT"
+
+      - name: Compute image tag
+        id: meta
+        run: echo "tag=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build & push api
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/Dockerfile.app
+          build-args: SERVICE=api
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ steps.owner.outputs.lc }}/newsfeed-api:${{ steps.meta.outputs.tag }}
+            ${{ env.REGISTRY }}/${{ steps.owner.outputs.lc }}/newsfeed-api:latest
+          cache-from: type=gha,scope=api
+          cache-to: type=gha,scope=api,mode=max
+
+      - name: Build & push crawler
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/Dockerfile.app
+          build-args: SERVICE=crawler
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ steps.owner.outputs.lc }}/newsfeed-crawler:${{ steps.meta.outputs.tag }}
+            ${{ env.REGISTRY }}/${{ steps.owner.outputs.lc }}/newsfeed-crawler:latest
+          cache-from: type=gha,scope=crawler
+          cache-to: type=gha,scope=crawler,mode=max
+
+  build-web:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+        working-directory: web
+      - run: npm run build
+        working-directory: web
+      - name: Pack static dist
+        run: tar -czf web-dist.tar.gz -C web/out .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: web-dist
+          path: web-dist.tar.gz
+          retention-days: 7
+
+  deploy:
+    needs: [build-images, build-web]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: web-dist
+
+      - name: Set lowercase image owner
+        id: owner
+        run: echo "lc=${IMAGE_OWNER,,}" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare deploy bundle
+        run: |
+          mkdir -p bundle
+          cp -r deploy/docker-compose.prod.yml deploy/nginx.conf migrations bundle/
+          cp web-dist.tar.gz bundle/
+          tar -czf bundle.tar.gz -C bundle .
+          ls -la bundle/
+
+      - name: Setup SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -p ${{ secrets.SSH_PORT || 22 }} -H ${{ secrets.SSH_HOST }} >> ~/.ssh/known_hosts
+
+      - name: Upload bundle
+        run: |
+          scp -P ${{ secrets.SSH_PORT || 22 }} bundle.tar.gz \
+            ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:/tmp/newsfeed-bundle.tar.gz
+
+      - name: Deploy
+        env:
+          IMAGE_TAG: ${{ needs.build-images.outputs.image_tag }}
+          OWNER: ${{ steps.owner.outputs.lc }}
+        run: |
+          ssh -p ${{ secrets.SSH_PORT || 22 }} \
+            ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} \
+            "IMAGE_TAG=${IMAGE_TAG} OWNER=${OWNER} bash -s" <<'REMOTE'
+          set -euo pipefail
+
+          APP_DIR=/opt/newsfeed
+          sudo mkdir -p "$APP_DIR"
+          sudo chown "$USER":"$USER" "$APP_DIR"
+
+          # 解包配置
+          tar -xzf /tmp/newsfeed-bundle.tar.gz -C "$APP_DIR"
+          rm -f /tmp/newsfeed-bundle.tar.gz
+
+          # 解包前端
+          rm -rf "$APP_DIR/web-dist"
+          mkdir -p "$APP_DIR/web-dist"
+          tar -xzf "$APP_DIR/web-dist.tar.gz" -C "$APP_DIR/web-dist"
+          rm -f "$APP_DIR/web-dist.tar.gz"
+
+          cd "$APP_DIR"
+
+          # 首次部署需要手动准备 .env;之后 CI 只覆盖配置和镜像 tag
+          if [ ! -f .env ]; then
+            echo "ERROR: $APP_DIR/.env missing. 首次部署请先 SSH 上来手动创建 .env(参考 .env.prod.example)" >&2
+            exit 1
+          fi
+
+          # 用 CI 推过来的最新 tag 覆盖镜像引用
+          sed -i "s|^API_IMAGE=.*|API_IMAGE=ghcr.io/${OWNER}/newsfeed-api:${IMAGE_TAG}|" .env
+          sed -i "s|^CRAWLER_IMAGE=.*|CRAWLER_IMAGE=ghcr.io/${OWNER}/newsfeed-crawler:${IMAGE_TAG}|" .env
+
+          # 登录 GHCR(私有镜像才需要;public 可省略,但保留无害)
+          # 这里假设镜像是 public,若改为 private 需要在 server 上提前 docker login
+
+          docker compose -f docker-compose.prod.yml pull
+          docker compose --profile migrate run --rm migrate || true  # 应用新迁移(若有)
+          docker compose -f docker-compose.prod.yml up -d
+          docker compose -f docker-compose.prod.yml ps
+          REMOTE

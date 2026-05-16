@@ -1,0 +1,23 @@
+# 本地开发用 PostgreSQL。仅监听 127.0.0.1,数据持久化到命名卷。
+# 用法:make db-up / make db-down / make db-logs
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: newsfeed-pg
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: newsfeed
+      POSTGRES_PASSWORD: newsfeed
+      POSTGRES_DB: newsfeed
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - newsfeed_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U newsfeed -d newsfeed"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  newsfeed_pgdata:

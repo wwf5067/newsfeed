@@ -1,0 +1,30 @@
+# 二进制
+bin/
+*.exe
+*.out
+
+# 环境变量
+.env
+.env.local
+.env.smoke
+deploy/.env
+
+# 编辑器
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# 前端
+web/node_modules/
+web/.next/
+web/out/
+web/.turbo/
+
+# 测试/覆盖率
+coverage.out
+*.test
+
+# 部署本地产物(只在 CI / 服务器上需要)
+deploy/web-dist/
+deploy/migrations

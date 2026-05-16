@@ -1,0 +1,89 @@
+# 生产 docker-compose,部署在 Lighthouse 上。
+#
+# 启动前提:
+#   1) 同目录下放好 .env(参考 .env.prod.example)
+#   2) 前端静态产物已解压到 ./web-dist/
+#   3) GHCR_USER/IMAGE_TAG 等通过 .env 注入
+#
+# 网络拓扑:
+#   - nginx 暴露 80 到宿主机
+#   - api 仅在 docker 内网,由 nginx 反代
+#   - crawler 完全不暴露端口
+#   - postgres 只在 docker 内网,host 访问需要进容器
+#
+# 数据持久化:命名卷 pgdata
+
+name: newsfeed
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  migrate:
+    # 一次性迁移容器。使用方式:
+    #   docker compose --profile migrate run --rm migrate
+    image: migrate/migrate:v4.19.1
+    command:
+      - "-path=/migrations"
+      - "-database"
+      - "postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable"
+      - "up"
+    volumes:
+      - ./migrations:/migrations:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    profiles: ["migrate"] # 默认不启动,需显式带 profile 触发
+    restart: "no"
+  api:
+    image: ${API_IMAGE}
+    restart: unless-stopped
+    environment:
+      APP_ENV: prod
+      LOG_LEVEL: info
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable
+      API_ADDR: ":8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  crawler:
+    image: ${CRAWLER_IMAGE}
+    restart: unless-stopped
+    environment:
+      APP_ENV: prod
+      LOG_LEVEL: info
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable
+      CRAWLER_ADDR: "127.0.0.1:8081"
+      ZHIHU_COOKIE: ${ZHIHU_COOKIE}
+      ZHIHU_SCHEDULE: ${ZHIHU_SCHEDULE:-0 */30 * * * *}
+      RUN_ON_START: ${RUN_ON_START:-false}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  nginx:
+    image: nginx:alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./web-dist:/usr/share/nginx/html:ro
+    depends_on:
+      - api
+
+volumes:
+  pgdata:
