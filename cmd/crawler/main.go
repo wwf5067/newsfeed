@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"math/rand"
 	"net/http"
 	"os"
 	"os/signal"
@@ -60,8 +61,14 @@ func main() {
 	log.Info("crawler started", "retention_days", cfg.RetentionDays)
 
 	if cfg.RunOnStart && registered > 0 {
-		log.Info("RUN_ON_START=true, executing all sources now")
-		go runner.RunAllNow()
+		// 启动保护:随机延迟 5~30 秒后再执行首次抓取,
+		// 避免容器重启风暴导致瞬时并发请求
+		startDelay := time.Duration(5+rand.Intn(25)) * time.Second
+		log.Info("RUN_ON_START=true, will execute all sources after delay", "delay", startDelay)
+		go func() {
+			time.Sleep(startDelay)
+			runner.RunAllNow()
+		}()
 	}
 
 	// 启动时执行一次过期清理

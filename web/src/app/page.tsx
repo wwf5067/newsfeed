@@ -9,6 +9,7 @@ type Article = {
   title: string;
   content: string;
   author: string;
+  heat: string;
   published_at: string;
   fetched_at: string;
 };
@@ -127,9 +128,16 @@ export default function Home() {
                 {String(i + 1).padStart(2, "0")}
               </span>
               <div className="min-w-0 flex-1">
-                <h2 className="text-base font-medium leading-snug text-zinc-900 group-hover:underline dark:text-zinc-100">
-                  {a.title}
-                </h2>
+                <div className="flex items-center gap-2">
+                  <h2 className="text-base font-medium leading-snug text-zinc-900 group-hover:underline dark:text-zinc-100">
+                    {a.title}
+                  </h2>
+                  {a.heat && (
+                    <span className="shrink-0 rounded-full bg-red-50 px-2 py-0.5 text-xs font-medium text-red-600 dark:bg-red-950 dark:text-red-400">
+                      {a.heat}
+                    </span>
+                  )}
+                </div>
                 {a.content && (
                   <p className="mt-1 line-clamp-2 text-sm text-zinc-600 dark:text-zinc-400">
                     {a.content}

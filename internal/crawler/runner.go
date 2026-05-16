@@ -2,8 +2,10 @@ package crawler
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
+	"math/rand"
 	"sync"
 	"time"
 
@@ -15,6 +17,7 @@ type SourceHealth struct {
 	ConsecutiveFailures int       `json:"consecutive_failures"`
 	LastError           string    `json:"last_error,omitempty"`
 	LastSuccess         time.Time `json:"last_success,omitempty"`
+	BackoffUntil        time.Time `json:"backoff_until,omitempty"` // 退避截止时间,在此之前跳过抓取
 }
 
 // Runner 把 Source 注册到 cron 调度器,并在每次触发时执行抓取 + 入库。
@@ -62,7 +65,7 @@ func (r *Runner) RunAllNow() {
 	}
 }
 
-// Health 返回所有 Source 的健康状态快照(线程安全)。
+// Health 返回所有 Source 的健康状态快照（线程安全）。
 func (r *Runner) Health() map[string]*SourceHealth {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -75,7 +78,7 @@ func (r *Runner) Health() map[string]*SourceHealth {
 	return out
 }
 
-// Start 启动调度器(非阻塞)。
+// Start 启动调度器（非阻塞）。
 func (r *Runner) Start() {
 	// 注册数据清理任务:每天凌晨 3 点
 	if r.retentionDays > 0 {
@@ -104,16 +107,38 @@ func (r *Runner) Stop(ctx context.Context) {
 }
 
 func (r *Runner) runOnce(s Source) {
-	start := time.Now()
+	log := r.logger.With("source", s.Key())
+
+	// ---- 退避检查:如果还在退避期内,直接跳过 ----
+	if until := r.getBackoffUntil(s.Key()); !until.IsZero() && time.Now().Before(until) {
+		log.Warn("skipping fetch due to backoff",
+			"backoff_until", until.Format(time.RFC3339),
+			"remaining", time.Until(until).Round(time.Second))
+		return
+	}
+
+	// ---- 随机延迟 (jitter):打破精确定时的机器人特征 ----
+	jitter := time.Duration(rand.Int63n(60)+1) * time.Second // 1~60 秒
+	log.Info("fetch scheduled", "jitter", jitter.Round(time.Second))
+
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
-	log := r.logger.With("source", s.Key())
+	select {
+	case <-time.After(jitter):
+		// jitter 等待完成,继续执行
+	case <-ctx.Done():
+		log.Warn("jitter wait cancelled")
+		return
+	}
+
+	start := time.Now()
 	log.Info("fetch started")
 
 	articles, err := s.Fetch(ctx)
 	if err != nil {
 		r.recordFailure(s.Key(), err)
+		r.applyBackoff(s.Key(), err)
 		log.Error("fetch failed", "err", err)
 		return
 	}
@@ -154,6 +179,75 @@ func (r *Runner) purge() {
 	r.logger.Info("purge done", "retention_days", r.retentionDays, "deleted", deleted)
 }
 
+// getBackoffUntil 读取某 Source 当前的退避截止时间。
+func (r *Runner) getBackoffUntil(key string) time.Time {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	if h := r.health[key]; h != nil {
+		return h.BackoffUntil
+	}
+	return time.Time{}
+}
+
+// applyBackoff 根据错误类型设置退避时长。
+// 不同错误类型对应不同的退避策略,严重的封禁信号退避更久。
+func (r *Runner) applyBackoff(key string, err error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	h := r.health[key]
+	if h == nil {
+		h = &SourceHealth{}
+		r.health[key] = h
+	}
+
+	var backoff time.Duration
+
+	switch {
+	case errors.Is(err, ErrBanned):
+		// 403 封禁 → 退避 6~12 小时
+		backoff = time.Duration(6*3600+rand.Int63n(6*3600)) * time.Second
+		r.logger.Error(fmt.Sprintf("ALERT: source %s is BANNED (403), backing off %.1f hours. Check cookie or IP!",
+			key, backoff.Hours()))
+
+	case errors.Is(err, ErrCookieExpired):
+		// Cookie 过期 → 退避 6~12 小时,等人工更换
+		backoff = time.Duration(6*3600+rand.Int63n(6*3600)) * time.Second
+		r.logger.Error(fmt.Sprintf("ALERT: source %s cookie EXPIRED, backing off %.1f hours. Replace ZHIHU_COOKIE!",
+			key, backoff.Hours()))
+
+	case errors.Is(err, ErrRateLimited):
+		// 429 限流 → 退避 1~2 小时
+		backoff = time.Duration(3600+rand.Int63n(3600)) * time.Second
+		r.logger.Warn(fmt.Sprintf("source %s rate limited (429), backing off %.1f hours",
+			key, backoff.Hours()))
+
+	case errors.Is(err, ErrEmptyData):
+		// 空数据 → 退避 30~60 分钟,可能是临时问题
+		backoff = time.Duration(1800+rand.Int63n(1800)) * time.Second
+		r.logger.Warn(fmt.Sprintf("source %s returned empty data, backing off %.0f minutes",
+			key, backoff.Minutes()))
+
+	default:
+		// 普通错误(网络超时等) → 不额外退避,只跳过 1 个周期(靠连续失败计数器自然处理)
+		// 但如果已经连续失败多次,开始渐进退避
+		if h.ConsecutiveFailures >= 3 {
+			// 连续失败 3+ 次:退避 30 分钟 × 失败次数(上限 6 小时)
+			multiplier := int64(h.ConsecutiveFailures)
+			if multiplier > 12 {
+				multiplier = 12
+			}
+			backoff = time.Duration(multiplier*1800) * time.Second
+			r.logger.Warn(fmt.Sprintf("source %s failed %d times consecutively, backing off %.0f minutes",
+				key, h.ConsecutiveFailures, backoff.Minutes()))
+		}
+		return // 前几次普通失败不设退避
+	}
+
+	h.BackoffUntil = time.Now().Add(backoff)
+}
+
 func (r *Runner) recordFailure(key string, err error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -167,7 +261,7 @@ func (r *Runner) recordFailure(key string, err error) {
 	h.LastError = err.Error()
 
 	if h.ConsecutiveFailures >= 3 {
-		r.logger.Error(fmt.Sprintf("ALERT: source %s failed %d times consecutively, cookie may be expired",
+		r.logger.Error(fmt.Sprintf("ALERT: source %s failed %d times consecutively",
 			key, h.ConsecutiveFailures), "last_error", h.LastError)
 	}
 }
@@ -184,4 +278,5 @@ func (r *Runner) recordSuccess(key string) {
 	h.ConsecutiveFailures = 0
 	h.LastError = ""
 	h.LastSuccess = time.Now()
+	h.BackoffUntil = time.Time{} // 成功后清除退避
 }

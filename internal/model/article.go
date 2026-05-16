@@ -11,6 +11,7 @@ type Article struct {
 	Title       string    `json:"title"`
 	Content     string    `json:"content"`
 	Author      string    `json:"author"`
+	Heat        string    `json:"heat"` // 热度文本,如 "1234 万热度"
 	PublishedAt time.Time `json:"published_at"`
 	FetchedAt   time.Time `json:"fetched_at"`
 }

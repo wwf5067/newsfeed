@@ -22,19 +22,20 @@ func NewRepository(pool *pgxpool.Pool) *Repository {
 // 返回值 inserted=true 表示新插入,false 表示更新已有记录。
 func (r *Repository) UpsertArticle(ctx context.Context, a model.Article) (inserted bool, err error) {
 	const q = `
-INSERT INTO articles (source_key, url, title, content, author, published_at, fetched_at)
-VALUES ($1, $2, $3, $4, $5, $6, NOW())
+INSERT INTO articles (source_key, url, title, content, author, heat, published_at, fetched_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
 ON CONFLICT (url) DO UPDATE SET
     title        = EXCLUDED.title,
     content      = EXCLUDED.content,
     author       = EXCLUDED.author,
+    heat         = EXCLUDED.heat,
     published_at = EXCLUDED.published_at,
     fetched_at   = NOW()
 RETURNING (xmax = 0) AS is_new
 `
 	var isNew bool
 	err = r.pool.QueryRow(ctx, q,
-		a.SourceKey, a.URL, a.Title, a.Content, a.Author, a.PublishedAt,
+		a.SourceKey, a.URL, a.Title, a.Content, a.Author, a.Heat, a.PublishedAt,
 	).Scan(&isNew)
 	if err != nil {
 		return false, err
