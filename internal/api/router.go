@@ -21,6 +21,7 @@ func NewRouter(h *Handler) http.Handler {
 
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Get("/articles", h.ListArticles)
+		r.Get("/announcements", h.ListAnnouncements)
 	})
 
 	return r

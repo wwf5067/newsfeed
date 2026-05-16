@@ -20,8 +20,22 @@ type ListResp = {
   offset: number;
 };
 
+type Announcement = {
+  id: number;
+  content: string;
+  level: "info" | "warn" | "critical";
+  priority: number;
+  starts_at: string;
+  ends_at: string | null;
+  is_active: boolean;
+};
+
 // 自动刷新间隔:5 分钟
 const POLL_INTERVAL_MS = 5 * 60 * 1000;
+// 公告刷新间隔:10 分钟(变更频率远低于文章)
+const ANNOUNCEMENT_POLL_MS = 10 * 60 * 1000;
+// localStorage 键:已被用户关闭、不再展示的公告 id 列表
+const DISMISSED_KEY = "dismissed_announcements";
 
 // 静态导出时不能用 SSR,所以走 client fetch。
 // 开发环境由 next.config rewrites 代理到 localhost:8080,
@@ -30,6 +44,13 @@ async function fetchArticles(): Promise<Article[]> {
   const res = await fetch("/api/v1/articles?limit=50", { cache: "no-store" });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const data: ListResp = await res.json();
+  return data.items ?? [];
+}
+
+async function fetchAnnouncements(): Promise<Announcement[]> {
+  const res = await fetch("/api/v1/announcements", { cache: "no-store" });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const data: { items: Announcement[] } = await res.json();
   return data.items ?? [];
 }
 
@@ -48,6 +69,101 @@ function formatRelativeTime(date: Date): string {
   if (diffSec < 60) return "刚刚";
   if (diffSec < 3600) return `${Math.floor(diffSec / 60)} 分钟前`;
   return formatTime(date.toISOString());
+}
+
+// level → Tailwind class 映射。深色模式自动适配。
+const LEVEL_CLASSES: Record<Announcement["level"], string> = {
+  info: "border-blue-200 bg-blue-50 text-blue-800 dark:border-blue-800 dark:bg-blue-950 dark:text-blue-300",
+  warn: "border-yellow-200 bg-yellow-50 text-yellow-800 dark:border-yellow-800 dark:bg-yellow-950 dark:text-yellow-300",
+  critical: "border-red-200 bg-red-50 text-red-800 dark:border-red-800 dark:bg-red-950 dark:text-red-300",
+};
+
+function readDismissed(): number[] {
+  // 仅在浏览器调用,SSR 环境下 typeof window 检查由调用方保证(useEffect 内)
+  try {
+    const raw = localStorage.getItem(DISMISSED_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.filter((x) => typeof x === "number") : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeDismissed(ids: number[]): void {
+  try {
+    localStorage.setItem(DISMISSED_KEY, JSON.stringify(ids));
+  } catch {
+    // localStorage 可能因隐私模式不可用,静默忽略
+  }
+}
+
+function AnnouncementBar() {
+  const [items, setItems] = useState<Announcement[]>([]);
+  const [dismissedIds, setDismissedIds] = useState<number[]>([]);
+
+  // 初次挂载时从 localStorage 同步已读 id(必须在 useEffect 内,避免 SSR/SSG 阶段访问 window)
+  useEffect(() => {
+    setDismissedIds(readDismissed());
+  }, []);
+
+  // 拉取 + 10 分钟轮询
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const list = await fetchAnnouncements();
+        if (!cancelled) setItems(list);
+      } catch {
+        // 公告失败完全静默,不影响主页面
+      }
+    };
+    load();
+    const timer = setInterval(load, ANNOUNCEMENT_POLL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, []);
+
+  const visible = items.filter((a) => !dismissedIds.includes(a.id));
+  if (visible.length === 0) return null;
+
+  const dismiss = (id: number) => {
+    const next = [...dismissedIds, id];
+    setDismissedIds(next);
+    writeDismissed(next);
+  };
+
+  return (
+    <div className="mb-4 space-y-2">
+      {visible.map((a) => (
+        <div
+          key={a.id}
+          className={`flex items-start gap-3 rounded-md border px-4 py-3 text-sm ${LEVEL_CLASSES[a.level]}`}
+          role="status"
+        >
+          <div className="min-w-0 flex-1 whitespace-pre-wrap break-words">{a.content}</div>
+          <button
+            type="button"
+            onClick={() => dismiss(a.id)}
+            aria-label="关闭公告"
+            className="shrink-0 rounded p-0.5 text-current opacity-60 transition hover:opacity-100"
+          >
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              viewBox="0 0 20 20"
+              className="h-4 w-4"
+              fill="currentColor"
+              aria-hidden="true"
+            >
+              <path d="M6.28 5.22a.75.75 0 0 0-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 1 0 1.06 1.06L10 11.06l3.72 3.72a.75.75 0 1 0 1.06-1.06L11.06 10l3.72-3.72a.75.75 0 0 0-1.06-1.06L10 8.94 6.28 5.22Z" />
+            </svg>
+          </button>
+        </div>
+      ))}
+    </div>
+  );
 }
 
 export default function Home() {
@@ -91,6 +207,7 @@ export default function Home() {
 
   return (
     <main className="mx-auto w-full max-w-3xl px-4 py-8">
+      <AnnouncementBar />
       <header className="mb-6 flex items-baseline justify-between">
         <h1 className="text-2xl font-semibold tracking-tight">Newsfeed</h1>
         <div className="flex items-baseline gap-3 text-sm text-zinc-500">

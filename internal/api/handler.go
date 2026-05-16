@@ -5,6 +5,8 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+
+	"github.com/wwf5067/newsfeed/internal/model"
 )
 
 // Handler 聚合所有 HTTP 处理器的依赖。
@@ -39,10 +41,25 @@ func (h *Handler) ListArticles(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"items": articles,
-		"limit": limit,
+		"items":  articles,
+		"limit":  limit,
 		"offset": offset,
 	})
+}
+
+// ListAnnouncements 返回当前生效的公告。无分页,公告量不大。
+// 响应里若无活跃公告,items 归一为空数组而非 null,简化前端处理。
+func (h *Handler) ListAnnouncements(w http.ResponseWriter, r *http.Request) {
+	items, err := h.repo.ListActiveAnnouncements(r.Context())
+	if err != nil {
+		h.logger.Error("list announcements", "err", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
+		return
+	}
+	if items == nil {
+		items = []model.Announcement{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
 }
 
 func writeJSON(w http.ResponseWriter, status int, body any) {

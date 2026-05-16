@@ -41,3 +41,33 @@ LIMIT $1 OFFSET $2
 	}
 	return out, rows.Err()
 }
+
+// ListActiveAnnouncements 返回当前生效的公告(按 priority 降序、创建时间倒序)。
+// 过滤条件:软开关 is_active=TRUE,starts_at 已到达,ends_at 未到达(或为 NULL)。
+// 公告量不大,这里不分页;前端一次性取全部已生效条目。
+func (r *Repository) ListActiveAnnouncements(ctx context.Context) ([]model.Announcement, error) {
+	const q = `
+SELECT id, content, level, priority, starts_at, ends_at, is_active, created_at, updated_at
+FROM announcements
+WHERE is_active = TRUE
+  AND starts_at <= NOW()
+  AND (ends_at IS NULL OR ends_at > NOW())
+ORDER BY priority DESC, created_at DESC
+`
+	rows, err := r.pool.Query(ctx, q)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []model.Announcement
+	for rows.Next() {
+		var a model.Announcement
+		if err := rows.Scan(&a.ID, &a.Content, &a.Level, &a.Priority,
+			&a.StartsAt, &a.EndsAt, &a.IsActive, &a.CreatedAt, &a.UpdatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
