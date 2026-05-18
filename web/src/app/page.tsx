@@ -10,6 +10,9 @@ type Article = {
   content: string;
   author: string;
   heat: string;
+  heat_value: number;
+  prev_heat: string;
+  prev_heat_value: number;
   published_at: string;
   fetched_at: string;
 };
@@ -69,6 +72,60 @@ function formatRelativeTime(date: Date): string {
   if (diffSec < 60) return "刚刚";
   if (diffSec < 3600) return `${Math.floor(diffSec / 60)} 分钟前`;
   return formatTime(date.toISOString());
+}
+
+// 把数值热度格式化为中文短文本:1.2 亿 / 1234 万 / 500
+// 用于趋势差值显示;主热度优先用源原文(article.heat),源原文为空时回退到 formatHeat(value)。
+function formatHeat(v: number): string {
+  if (!Number.isFinite(v) || v <= 0) return "";
+  if (v >= 1e8) {
+    const n = v / 1e8;
+    return `${n >= 10 ? n.toFixed(0) : n.toFixed(1)} 亿`;
+  }
+  if (v >= 1e4) {
+    return `${Math.round(v / 1e4)} 万`;
+  }
+  return String(Math.round(v));
+}
+
+// HeatBadge 统一热度展示样式:🔥 主热度 + 可选趋势(↑/↓ 差值)。
+// 趋势仅在 prev_value > 0 且与当前不同时显示,首次抓取的条目不展示趋势。
+function HeatBadge({
+  heat,
+  value,
+  prevValue,
+}: {
+  heat: string;
+  value: number;
+  prevValue: number;
+}) {
+  const main = heat || formatHeat(value);
+  if (!main) return null;
+
+  const hasTrend = prevValue > 0 && value > 0 && value !== prevValue;
+  const diff = value - prevValue;
+  const up = diff > 0;
+  const trendText = hasTrend ? formatHeat(Math.abs(diff)) : "";
+
+  return (
+    <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-red-50 px-2 py-0.5 text-xs font-medium tabular-nums text-red-600 dark:bg-red-950 dark:text-red-400">
+      <span aria-hidden="true">🔥</span>
+      <span>{main}</span>
+      {hasTrend && (
+        <span
+          className={
+            up
+              ? "text-emerald-600 dark:text-emerald-400"
+              : "text-zinc-500 dark:text-zinc-400"
+          }
+          title={`相比上次 ${up ? "上升" : "下降"} ${trendText}`}
+        >
+          {up ? "↑" : "↓"}
+          {trendText}
+        </span>
+      )}
+    </span>
+  );
 }
 
 // level → Tailwind class 映射。深色模式自动适配。
@@ -249,10 +306,12 @@ export default function Home() {
                   <h2 className="text-base font-medium leading-snug text-zinc-900 group-hover:underline dark:text-zinc-100">
                     {a.title}
                   </h2>
-                  {a.heat && (
-                    <span className="shrink-0 rounded-full bg-red-50 px-2 py-0.5 text-xs font-medium text-red-600 dark:bg-red-950 dark:text-red-400">
-                      {a.heat}
-                    </span>
+                  {(a.heat || a.heat_value > 0) && (
+                    <HeatBadge
+                      heat={a.heat}
+                      value={a.heat_value}
+                      prevValue={a.prev_heat_value}
+                    />
                   )}
                 </div>
                 {a.content && (
