@@ -217,7 +217,7 @@ function ArticleContent() {
     setSubmitting(true);
     setSubscribeMsg(null);
     try {
-      const result = await addSubscription(article.title);
+      const result = await addSubscription(article!.title);
       if (result.created === false) {
         setSubscribeMsg("该标题已经在订阅列表里");
       } else {
