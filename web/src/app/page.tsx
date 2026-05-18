@@ -44,6 +44,10 @@ const DISMISSED_KEY = "dismissed_announcements";
 // localStorage 键:已读 / 收藏的文章 id
 const READ_KEY = "read_ids";
 const STARRED_KEY = "starred_ids";
+// 关键词订阅:string[],新内容到达时本地匹配 title/content 命中即弹桌面通知
+const KEYWORDS_KEY = "keyword_subscriptions";
+// 通知开关(用户主动同意过 Notification API 才会触发)
+const NOTIFY_ENABLED_KEY = "notify_enabled";
 
 // 源 tab 配置。新增源时在此追加一项。
 const SOURCES: { key: string; label: string }[] = [
@@ -215,6 +219,63 @@ function useIdSet(storageKey: string) {
   return { ids, add, toggle };
 }
 
+// useStringSet 跟 useIdSet 同构,只是元素是 string(去前后空白 + 不区分大小写)。
+// 用于关键词订阅:add 时归一化、空字符串忽略。
+function useStringSet(storageKey: string) {
+  const [items, setItems] = useState<string[]>([]);
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(storageKey);
+      if (!raw) return;
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        setItems(parsed.filter((x) => typeof x === "string" && x.length > 0));
+      }
+    } catch {
+      // ignore
+    }
+  }, [storageKey]);
+
+  const persist = useCallback(
+    (next: string[]) => {
+      try {
+        localStorage.setItem(storageKey, JSON.stringify(next));
+      } catch {
+        // ignore
+      }
+    },
+    [storageKey]
+  );
+
+  const add = useCallback(
+    (raw: string) => {
+      const v = raw.trim();
+      if (!v) return;
+      setItems((prev) => {
+        if (prev.some((x) => x.toLowerCase() === v.toLowerCase())) return prev;
+        const next = [...prev, v];
+        persist(next);
+        return next;
+      });
+    },
+    [persist]
+  );
+
+  const remove = useCallback(
+    (v: string) => {
+      setItems((prev) => {
+        const next = prev.filter((x) => x !== v);
+        persist(next);
+        return next;
+      });
+    },
+    [persist]
+  );
+
+  return { items, add, remove };
+}
+
 // level → Tailwind class 映射。深色模式自动适配。
 // quote 是 crawler 每日轮询发布的名言,用中性偏文艺的紫灰区分于通知类。
 const LEVEL_CLASSES: Record<Announcement["level"], string> = {
@@ -329,6 +390,40 @@ export default function Home() {
   const read = useIdSet(READ_KEY);
   const starred = useIdSet(STARRED_KEY);
 
+  // 关键词订阅 + 通知开关
+  const keywords = useStringSet(KEYWORDS_KEY);
+  const [keywordInput, setKeywordInput] = useState("");
+  const [subOpen, setSubOpen] = useState(false);
+  const [notifyEnabled, setNotifyEnabled] = useState(false);
+  const [notifySupported, setNotifySupported] = useState(true);
+
+  // 同步浏览器通知权限 + 用户开关到组件状态
+  useEffect(() => {
+    if (typeof window === "undefined" || !("Notification" in window)) {
+      setNotifySupported(false);
+      return;
+    }
+    const stored = localStorage.getItem(NOTIFY_ENABLED_KEY) === "true";
+    setNotifyEnabled(stored && Notification.permission === "granted");
+  }, []);
+
+  const toggleNotify = useCallback(async () => {
+    if (typeof window === "undefined" || !("Notification" in window)) return;
+    if (notifyEnabled) {
+      setNotifyEnabled(false);
+      localStorage.setItem(NOTIFY_ENABLED_KEY, "false");
+      return;
+    }
+    let perm = Notification.permission;
+    if (perm === "default") {
+      perm = await Notification.requestPermission();
+    }
+    if (perm === "granted") {
+      setNotifyEnabled(true);
+      localStorage.setItem(NOTIFY_ENABLED_KEY, "true");
+    }
+  }, [notifyEnabled]);
+
   // 全局 toast(短暂提示,如"分享链接已复制")
   const [toast, setToast] = useState<string | null>(null);
   useEffect(() => {
@@ -354,9 +449,53 @@ export default function Home() {
     return () => clearTimeout(timer);
   }, [query]);
 
+  // 上次已知的 article id 集合,用于检测"新增"条目以触发关键词通知
+  const prevIdsRef = useRef<Set<number>>(new Set());
+
+  // 检测新增条目并匹配关键词,命中则弹桌面通知。
+  // 仅匹配本次返回的 50 条(决策 4A:不打额外请求);首次加载不弹(避免页面打开瞬间炸通知)。
+  const matchAndNotify = useCallback(
+    (items: Article[]) => {
+      if (!notifyEnabled || keywords.items.length === 0) {
+        // 仍要更新 prevIds,否则下次 toggle 通知后会把所有当前条目当"新增"
+        prevIdsRef.current = new Set(items.map((a) => a.id));
+        return;
+      }
+      // 首次加载:initialLoad.current 此时仍为 true(在 finally 里才置 false)
+      if (initialLoad.current) {
+        prevIdsRef.current = new Set(items.map((a) => a.id));
+        return;
+      }
+      const prev = prevIdsRef.current;
+      const newOnes = items.filter((a) => !prev.has(a.id));
+      prevIdsRef.current = new Set(items.map((a) => a.id));
+      if (newOnes.length === 0) return;
+      const lowered = keywords.items.map((k) => k.toLowerCase());
+      for (const a of newOnes) {
+        const haystack = (a.title + " " + a.content).toLowerCase();
+        const hit = lowered.find((k) => haystack.includes(k));
+        if (!hit) continue;
+        try {
+          const n = new Notification(`Newsfeed:命中关键词 "${hit}"`, {
+            body: a.title,
+            tag: `newsfeed-${a.id}`, // 同一文章只弹一次,新通知会替换旧的
+          });
+          n.onclick = () => {
+            window.focus();
+            window.location.href = `/article/${a.id}`;
+          };
+        } catch {
+          // 通知失败(权限被撤销等)→ 静默
+        }
+      }
+    },
+    [notifyEnabled, keywords.items]
+  );
+
   const refresh = useCallback(async () => {
     try {
       const items = await fetchArticles(source, debouncedQ);
+      matchAndNotify(items);
       setArticles(items);
       setLastUpdated(new Date());
       setError(null);
@@ -371,7 +510,7 @@ export default function Home() {
         initialLoad.current = false;
       }
     }
-  }, [source, debouncedQ]);
+  }, [source, debouncedQ, matchAndNotify]);
 
   useEffect(() => {
     refresh();
@@ -430,6 +569,88 @@ export default function Home() {
           aria-label="搜索"
           className="ml-auto min-w-0 flex-1 rounded-md border border-zinc-200 bg-white px-3 py-1 text-sm outline-none placeholder:text-zinc-400 focus:border-zinc-400 dark:border-zinc-800 dark:bg-zinc-900 dark:focus:border-zinc-600"
         />
+      </div>
+
+      {/* 关键词订阅区(默认折叠) */}
+      <div className="mb-4 text-sm">
+        <button
+          type="button"
+          onClick={() => setSubOpen((v) => !v)}
+          className="text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100"
+        >
+          🔔 关键词订阅
+          {keywords.items.length > 0 && (
+            <span className="ml-1 text-xs text-zinc-400">({keywords.items.length})</span>
+          )}
+          <span className="ml-1 text-xs">{subOpen ? "▴" : "▾"}</span>
+        </button>
+        {subOpen && (
+          <div className="mt-2 rounded-md border border-zinc-200 bg-zinc-50 p-3 dark:border-zinc-800 dark:bg-zinc-900">
+            <div className="mb-2 flex flex-wrap gap-2">
+              {keywords.items.length === 0 ? (
+                <span className="text-xs text-zinc-500">还没有订阅关键词</span>
+              ) : (
+                keywords.items.map((k) => (
+                  <span
+                    key={k}
+                    className="inline-flex items-center gap-1 rounded-full bg-zinc-200 px-2 py-0.5 text-xs text-zinc-700 dark:bg-zinc-700 dark:text-zinc-200"
+                  >
+                    {k}
+                    <button
+                      type="button"
+                      onClick={() => keywords.remove(k)}
+                      aria-label={`移除 ${k}`}
+                      className="text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100"
+                    >
+                      ×
+                    </button>
+                  </span>
+                ))
+              )}
+            </div>
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                keywords.add(keywordInput);
+                setKeywordInput("");
+              }}
+              className="flex gap-2"
+            >
+              <input
+                type="text"
+                value={keywordInput}
+                onChange={(e) => setKeywordInput(e.target.value)}
+                placeholder="输入关键词后回车,如 AI / 裁员"
+                className="min-w-0 flex-1 rounded-md border border-zinc-300 bg-white px-2 py-1 text-xs outline-none focus:border-zinc-500 dark:border-zinc-700 dark:bg-zinc-800"
+              />
+              <button
+                type="submit"
+                className="rounded-md bg-zinc-900 px-3 py-1 text-xs text-white hover:bg-zinc-700 dark:bg-zinc-100 dark:text-zinc-900"
+              >
+                添加
+              </button>
+            </form>
+            <div className="mt-3 flex items-center justify-between text-xs text-zinc-500">
+              {notifySupported ? (
+                <button
+                  type="button"
+                  onClick={toggleNotify}
+                  className={
+                    "rounded px-2 py-1 transition " +
+                    (notifyEnabled
+                      ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-400"
+                      : "bg-zinc-200 text-zinc-600 hover:bg-zinc-300 dark:bg-zinc-800 dark:text-zinc-400")
+                  }
+                >
+                  {notifyEnabled ? "✓ 通知已开启" : "开启桌面通知"}
+                </button>
+              ) : (
+                <span>当前浏览器不支持桌面通知,关键词命中无法弹提示</span>
+              )}
+              <span>每 5 分钟轮询一次新内容</span>
+            </div>
+          </div>
+        )}
       </div>
 
       {error && (
