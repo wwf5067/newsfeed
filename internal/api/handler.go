@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
@@ -155,14 +156,14 @@ func (h *Handler) ListTrackers(w http.ResponseWriter, r *http.Request) {
 		limit = 12
 	}
 
-	articles, err := h.repo.ListRecentArticles(r.Context(), window, 300)
+	articles, err := h.repo.ListRecentArticles(r.Context(), window*2, 500)
 	if err != nil {
 		h.logger.Error("list trackers", "err", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
 		return
 	}
 
-	items := buildTrackerTopics(articles, limit)
+	items := buildTrackerTopics(articles, time.Now(), window, limit)
 	writeJSON(w, http.StatusOK, trackerResp{
 		Window: trackerWindow{Hours: window},
 		Items:  items,

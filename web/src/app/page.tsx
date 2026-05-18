@@ -41,7 +41,12 @@ type TrackerTopic = {
   label: string;
   kind: "entity" | "keyword";
   score: number;
+  prev_score: number;
+  score_delta: number;
   count: number;
+  prev_count: number;
+  count_delta: number;
+  momentum: "up" | "flat" | "down";
   related_terms: string[];
   sources: { source_key: string; count: number }[];
   sample_article?: {
@@ -142,6 +147,11 @@ function formatHeat(v: number): string {
     return `${Math.round(v / 1e4)} 万`;
   }
   return String(Math.round(v));
+}
+
+function formatSignedHeat(v: number): string {
+  if (!Number.isFinite(v) || v === 0) return "0";
+  return `${v > 0 ? "+" : "-"}${formatHeat(Math.abs(v))}`;
 }
 
 // HeatBadge 统一热度展示样式:🔥 主热度 + 可选趋势(↑/↓ 差值)。
@@ -522,12 +532,34 @@ function TrackerPanel({ onPickTerm }: { onPickTerm: (term: string) => void }) {
                   <span className="rounded-full bg-zinc-200 px-2 py-0.5 text-[11px] text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300">
                     {item.kind === "entity" ? "实体" : "话题"}
                   </span>
+                  <span
+                    className={
+                      "rounded-full px-2 py-0.5 text-[11px] " +
+                      (item.momentum === "up"
+                        ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300"
+                        : item.momentum === "down"
+                          ? "bg-zinc-200 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400"
+                          : "bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300")
+                    }
+                  >
+                    {item.momentum === "up" ? "升温" : item.momentum === "down" ? "回落" : "持平"}
+                  </span>
                 </div>
-                <p className="mt-1 text-xs text-zinc-500">{item.count} 条相关内容</p>
+                <p className="mt-1 text-xs text-zinc-500">
+                  {item.count} 条相关内容
+                  {item.count_delta !== 0 && (
+                    <span className="ml-1">
+                      {item.count_delta > 0 ? `较上一窗口 +${item.count_delta}` : `较上一窗口 ${item.count_delta}`}
+                    </span>
+                  )}
+                </p>
               </div>
-              <span className="text-xs font-medium tabular-nums text-emerald-600 dark:text-emerald-400">
-                {formatHeat(item.score)}
-              </span>
+              <div className="text-right text-xs font-medium tabular-nums">
+                <div className="text-emerald-600 dark:text-emerald-400">{formatHeat(item.score)}</div>
+                {item.score_delta !== 0 && (
+                  <div className="mt-0.5 text-[11px] text-zinc-500">{formatSignedHeat(item.score_delta)}</div>
+                )}
+              </div>
             </div>
 
             {item.sample_article && (

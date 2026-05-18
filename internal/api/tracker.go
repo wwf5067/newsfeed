@@ -4,6 +4,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/wwf5067/newsfeed/internal/model"
@@ -30,7 +31,12 @@ type trackerTopic struct {
 	Label         string              `json:"label"`
 	Kind          string              `json:"kind"`
 	Score         int64               `json:"score"`
+	PrevScore     int64               `json:"prev_score"`
+	ScoreDelta    int64               `json:"score_delta"`
 	Count         int                 `json:"count"`
+	PrevCount     int                 `json:"prev_count"`
+	CountDelta    int                 `json:"count_delta"`
+	Momentum      string              `json:"momentum"`
 	Sources       []trackerSourceStat `json:"sources"`
 	RelatedTerms  []string            `json:"related_terms"`
 	SampleArticle *trackerArticleRef  `json:"sample_article,omitempty"`
@@ -66,72 +72,55 @@ var (
 	entitySuffixes = []string{"公司", "集团", "大学", "医院", "银行", "汽车", "平台", "手机", "芯片", "模型", "赛事"}
 )
 
-func buildTrackerTopics(articles []model.Article, limit int) []trackerTopic {
-	accs := map[string]*trackerAccumulator{}
-	articleSeen := make(map[int64]map[string]struct{}, len(articles))
+func buildTrackerTopics(articles []model.Article, now time.Time, windowHours, limit int) []trackerTopic {
+	if windowHours <= 0 || windowHours > 168 {
+		windowHours = 24
+	}
+	window := time.Duration(windowHours) * time.Hour
+	recentCutoff := now.Add(-window)
+	prevCutoff := now.Add(-2 * window)
+
+	recentAccs := map[string]*trackerAccumulator{}
+	prevAccs := map[string]*trackerAccumulator{}
+	recentSeen := make(map[int64]map[string]struct{}, len(articles))
+	prevSeen := make(map[int64]map[string]struct{}, len(articles))
 
 	for _, article := range articles {
-		candidates := extractTrackerCandidates(article)
-		if len(candidates) == 0 {
-			continue
-		}
-		seen := articleSeen[article.ID]
-		if seen == nil {
-			seen = map[string]struct{}{}
-			articleSeen[article.ID] = seen
-		}
-
-		for _, c := range candidates {
-			key := c.Kind + ":" + c.Label
-			if _, ok := seen[key]; ok {
-				continue
-			}
-			seen[key] = struct{}{}
-
-			acc := accs[key]
-			if acc == nil {
-				acc = &trackerAccumulator{
-					Label:        c.Label,
-					Kind:         c.Kind,
-					Sources:      map[string]int{},
-					RelatedTerms: map[string]struct{}{},
-				}
-				accs[key] = acc
-			}
-
-			acc.Count++
-			acc.Score += scoreArticle(article)
-			acc.Sources[article.SourceKey]++
-			for _, related := range c.RelatedTerms {
-				if related != acc.Label {
-					acc.RelatedTerms[related] = struct{}{}
-				}
-			}
-			if acc.SampleArticle == nil || article.HeatValue > acc.SampleArticle.HeatValue {
-				acc.SampleArticle = &trackerArticleRef{
-					ID:        article.ID,
-					Title:     article.Title,
-					SourceKey: article.SourceKey,
-					Heat:      article.Heat,
-					HeatValue: article.HeatValue,
-				}
-			}
+		switch {
+		case !article.FetchedAt.Before(recentCutoff):
+			accumulateTrackerTopics(recentAccs, recentSeen, article)
+		case !article.FetchedAt.Before(prevCutoff):
+			accumulateTrackerTopics(prevAccs, prevSeen, article)
 		}
 	}
 
-	items := make([]trackerTopic, 0, len(accs))
-	for _, acc := range accs {
+	items := make([]trackerTopic, 0, len(recentAccs))
+	for key, acc := range recentAccs {
 		if acc.Count < 2 {
 			continue
 		}
 		if acc.Score == 0 {
 			continue
 		}
+		prev := prevAccs[key]
+		prevScore := int64(0)
+		prevCount := 0
+		if prev != nil {
+			prevScore = prev.Score
+			prevCount = prev.Count
+		}
+		scoreDelta := acc.Score - prevScore
+		countDelta := acc.Count - prevCount
 		items = append(items, trackerTopic{
 			Label:         acc.Label,
 			Kind:          acc.Kind,
 			Score:         acc.Score,
+			PrevScore:     prevScore,
+			ScoreDelta:    scoreDelta,
 			Count:         acc.Count,
+			PrevCount:     prevCount,
+			CountDelta:    countDelta,
+			Momentum:      detectMomentum(scoreDelta, countDelta),
 			Sources:       flattenTrackerSources(acc.Sources),
 			RelatedTerms:  flattenTrackerTerms(acc.RelatedTerms, 4),
 			SampleArticle: acc.SampleArticle,
@@ -139,6 +128,15 @@ func buildTrackerTopics(articles []model.Article, limit int) []trackerTopic {
 	}
 
 	sort.Slice(items, func(i, j int) bool {
+		if items[i].Momentum != items[j].Momentum {
+			return trackerMomentumRank(items[i].Momentum) < trackerMomentumRank(items[j].Momentum)
+		}
+		if items[i].ScoreDelta != items[j].ScoreDelta {
+			return items[i].ScoreDelta > items[j].ScoreDelta
+		}
+		if items[i].CountDelta != items[j].CountDelta {
+			return items[i].CountDelta > items[j].CountDelta
+		}
 		if items[i].Score != items[j].Score {
 			return items[i].Score > items[j].Score
 		}
@@ -152,6 +150,59 @@ func buildTrackerTopics(articles []model.Article, limit int) []trackerTopic {
 		items = items[:limit]
 	}
 	return items
+}
+
+func accumulateTrackerTopics(
+	accs map[string]*trackerAccumulator,
+	articleSeen map[int64]map[string]struct{},
+	article model.Article,
+) {
+	candidates := extractTrackerCandidates(article)
+	if len(candidates) == 0 {
+		return
+	}
+	seen := articleSeen[article.ID]
+	if seen == nil {
+		seen = map[string]struct{}{}
+		articleSeen[article.ID] = seen
+	}
+
+	for _, c := range candidates {
+		key := c.Kind + ":" + c.Label
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+
+		acc := accs[key]
+		if acc == nil {
+			acc = &trackerAccumulator{
+				Label:        c.Label,
+				Kind:         c.Kind,
+				Sources:      map[string]int{},
+				RelatedTerms: map[string]struct{}{},
+			}
+			accs[key] = acc
+		}
+
+		acc.Count++
+		acc.Score += scoreArticle(article)
+		acc.Sources[article.SourceKey]++
+		for _, related := range c.RelatedTerms {
+			if related != acc.Label {
+				acc.RelatedTerms[related] = struct{}{}
+			}
+		}
+		if acc.SampleArticle == nil || article.HeatValue > acc.SampleArticle.HeatValue {
+			acc.SampleArticle = &trackerArticleRef{
+				ID:        article.ID,
+				Title:     article.Title,
+				SourceKey: article.SourceKey,
+				Heat:      article.Heat,
+				HeatValue: article.HeatValue,
+			}
+		}
+	}
 }
 
 type trackerCandidate struct {
@@ -257,6 +308,27 @@ func scoreArticle(article model.Article) int64 {
 		return article.HeatValue + maxInt64(article.HeatValue-article.PrevHeatValue, 0)
 	}
 	return 10_000
+}
+
+func detectMomentum(scoreDelta int64, countDelta int) string {
+	if scoreDelta > 0 || countDelta > 0 {
+		return "up"
+	}
+	if scoreDelta < 0 || countDelta < 0 {
+		return "down"
+	}
+	return "flat"
+}
+
+func trackerMomentumRank(momentum string) int {
+	switch momentum {
+	case "up":
+		return 0
+	case "flat":
+		return 1
+	default:
+		return 2
+	}
 }
 
 func flattenTrackerSources(in map[string]int) []trackerSourceStat {
