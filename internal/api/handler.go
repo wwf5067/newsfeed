@@ -2,11 +2,14 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
 
+	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5"
 	"github.com/wwf5067/newsfeed/internal/model"
 )
 
@@ -61,6 +64,27 @@ func (h *Handler) ListArticles(w http.ResponseWriter, r *http.Request) {
 		"q":      q,
 		"source": source,
 	})
+}
+
+// GetArticleByID 按 id 路径参数查单条。未命中 → 404。
+func (h *Handler) GetArticleByID(w http.ResponseWriter, r *http.Request) {
+	idStr := chi.URLParam(r, "id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil || id <= 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid id"})
+		return
+	}
+	a, err := h.repo.GetArticle(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+			return
+		}
+		h.logger.Error("get article", "id", id, "err", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
+		return
+	}
+	writeJSON(w, http.StatusOK, a)
 }
 
 // ListAnnouncements 返回当前生效的公告。无分页,公告量不大。

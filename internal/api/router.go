@@ -18,9 +18,11 @@ func NewRouter(h *Handler) http.Handler {
 	r.Use(middleware.Timeout(15 * time.Second))
 
 	r.Get("/healthz", h.Health)
+	r.Get("/share/{id}", h.ShareArticle)
 
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Get("/articles", h.ListArticles)
+		r.Get("/articles/{id}", h.GetArticleByID)
 		r.Get("/announcements", h.ListAnnouncements)
 		r.Get("/feed.xml", h.FeedRSS)
 	})

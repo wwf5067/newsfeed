@@ -73,6 +73,27 @@ LIMIT $%d OFFSET $%d
 	return out, rows.Err()
 }
 
+// GetArticle 按主键查单条文章。未命中返回 pgx.ErrNoRows,上层据此转 404。
+func (r *Repository) GetArticle(ctx context.Context, id int64) (*model.Article, error) {
+	const q = `
+SELECT id, source_key, url, title, content, author,
+       heat, heat_value, prev_heat, prev_heat_value,
+       published_at, fetched_at
+FROM articles
+WHERE id = $1
+`
+	var a model.Article
+	err := r.pool.QueryRow(ctx, q, id).Scan(
+		&a.ID, &a.SourceKey, &a.URL, &a.Title, &a.Content,
+		&a.Author, &a.Heat, &a.HeatValue, &a.PrevHeat, &a.PrevHeatValue,
+		&a.PublishedAt, &a.FetchedAt,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return &a, nil
+}
+
 // ListActiveAnnouncements 返回当前生效的公告(按 priority 降序、创建时间倒序)。
 // 过滤条件:软开关 is_active=TRUE,starts_at 已到达,ends_at 未到达(或为 NULL)。
 // 公告量不大,这里不分页;前端一次性取全部已生效条目。

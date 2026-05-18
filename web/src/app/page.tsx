@@ -329,6 +329,25 @@ export default function Home() {
   const read = useIdSet(READ_KEY);
   const starred = useIdSet(STARRED_KEY);
 
+  // 全局 toast(短暂提示,如"分享链接已复制")
+  const [toast, setToast] = useState<string | null>(null);
+  useEffect(() => {
+    if (!toast) return;
+    const timer = setTimeout(() => setToast(null), 2000);
+    return () => clearTimeout(timer);
+  }, [toast]);
+
+  const copyShareLink = useCallback(async (id: number) => {
+    const url = `${window.location.origin}/share/${id}`;
+    try {
+      await navigator.clipboard.writeText(url);
+      setToast("分享链接已复制");
+    } catch {
+      // 降级:某些环境(非 HTTPS)没有 clipboard API
+      setToast(url);
+    }
+  }, []);
+
   // 搜索框防抖
   useEffect(() => {
     const timer = setTimeout(() => setDebouncedQ(query.trim()), SEARCH_DEBOUNCE_MS);
@@ -462,12 +481,25 @@ export default function Home() {
               >
                 {isStarred ? "★" : "☆"}
               </button>
+              {/* 分享按钮:复制 /share/{id} 到剪贴板 */}
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  copyShareLink(a.id);
+                }}
+                aria-label="复制分享链接"
+                className="absolute right-9 top-3 rounded p-1 text-sm text-zinc-300 transition hover:text-zinc-700 dark:text-zinc-600 dark:hover:text-zinc-200"
+              >
+                ↗
+              </button>
               <a
                 href={a.url}
                 target="_blank"
                 rel="noreferrer"
                 onClick={() => read.add(a.id)}
-                className="flex gap-3 pr-9"
+                className="flex gap-3 pr-16"
               >
                 <span className="shrink-0 select-none font-mono text-sm text-zinc-400 tabular-nums">
                   {String(i + 1).padStart(2, "0")}
@@ -508,6 +540,15 @@ export default function Home() {
           );
         })}
       </ul>
+
+      {toast && (
+        <div
+          role="status"
+          className="fixed bottom-6 left-1/2 z-50 -translate-x-1/2 rounded-md bg-zinc-900 px-4 py-2 text-sm text-white shadow-lg dark:bg-zinc-100 dark:text-zinc-900"
+        >
+          {toast}
+        </div>
+      )}
     </main>
   );
 }
