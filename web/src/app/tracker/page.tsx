@@ -1,8 +1,8 @@
 "use client";
 
-import { Suspense, useEffect, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 
 type Subscription = {
   id: number;
@@ -20,6 +20,7 @@ type TrackerStorylineResp = {
     source_key: string;
     heat: string;
     heat_value: number;
+    published_at: string; // 后端返回的 ISO 时间,前端按本地时区分组
   }[];
   momentum: "up" | "flat" | "down";
   score_delta: number;
@@ -57,6 +58,83 @@ function formatHeat(v: number): string {
 function formatSignedHeat(v: number): string {
   if (!Number.isFinite(v) || v === 0) return "0";
   return `${v > 0 ? "+" : "-"}${formatHeat(Math.abs(v))}`;
+}
+
+// 时间窗口选项。0 表示"全部",后端 sinceHours=0 不限时间。
+// 默认 720 小时 = 30 天 = 现行 retention 上限,等同于"自部署以来"。
+const WINDOW_OPTIONS: { hours: number; label: string }[] = [
+  { hours: 24, label: "24 小时" },
+  { hours: 168, label: "7 天" },
+  { hours: 720, label: "30 天" },
+  { hours: 0, label: "全部" },
+];
+const DEFAULT_WINDOW = 720;
+
+function windowLabel(hours: number): string {
+  const opt = WINDOW_OPTIONS.find((o) => o.hours === hours);
+  if (opt) return opt.label;
+  return hours > 0 ? `${hours} 小时` : "全部";
+}
+
+// formatTimeShort 渲染条目右侧的时间(本地时区,HH:MM)。
+function formatTimeShort(iso: string): string {
+  try {
+    return new Date(iso).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", hour12: false });
+  } catch {
+    return "";
+  }
+}
+
+// formatDateShort 跨天后展示日期(MM-DD)。
+function formatDateShort(iso: string): string {
+  try {
+    const d = new Date(iso);
+    return `${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  } catch {
+    return "";
+  }
+}
+
+// 时间分组:今天 / 昨天 / 本周 / 更早。组内按 heat_value 倒序。
+type TimeGroup = {
+  key: string;
+  label: string;
+  items: TrackerStorylineResp["items"];
+};
+
+function groupByTime(items: TrackerStorylineResp["items"]): TimeGroup[] {
+  if (items.length === 0) return [];
+  const now = new Date();
+  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const yesterdayStart = todayStart - 24 * 3600 * 1000;
+  const weekStart = todayStart - 7 * 24 * 3600 * 1000;
+
+  const today: TimeGroup["items"] = [];
+  const yesterday: TimeGroup["items"] = [];
+  const week: TimeGroup["items"] = [];
+  const older: TimeGroup["items"] = [];
+
+  for (const it of items) {
+    const t = new Date(it.published_at).getTime();
+    if (t >= todayStart) today.push(it);
+    else if (t >= yesterdayStart) yesterday.push(it);
+    else if (t >= weekStart) week.push(it);
+    else older.push(it);
+  }
+
+  // 组内按热度倒序;热度相等时按时间倒序
+  const sortByHeat = (arr: TimeGroup["items"]) =>
+    arr.sort((a, b) => {
+      if (a.heat_value !== b.heat_value) return b.heat_value - a.heat_value;
+      return new Date(b.published_at).getTime() - new Date(a.published_at).getTime();
+    });
+
+  const groups: TimeGroup[] = [];
+  if (today.length) groups.push({ key: "today", label: "今天", items: sortByHeat(today) });
+  if (yesterday.length) groups.push({ key: "yesterday", label: "昨天", items: sortByHeat(yesterday) });
+  if (week.length) groups.push({ key: "week", label: "本周", items: sortByHeat(week) });
+  if (older.length) groups.push({ key: "older", label: "更早", items: sortByHeat(older) });
+  return groups;
 }
 
 async function fetchTrackerStoryline(term: string, windowHours: number): Promise<TrackerStorylineResp> {
@@ -108,10 +186,18 @@ async function fetchRelatedTrackers(term: string, windowHours: number): Promise<
 }
 
 function TrackerPageContent() {
+  const router = useRouter();
   const searchParams = useSearchParams();
   const term = (searchParams.get("term") ?? "").trim();
-  const windowValue = Number(searchParams.get("window") ?? "24");
-  const windowHours = Number.isFinite(windowValue) && windowValue > 0 ? windowValue : 24;
+  // window 缺省时用 30 天(从详情页跳过来想看的就是"该实体所有相关文章")
+  // window=0 含义是"全部时间"(后端 sinceHours=0 不加时间过滤),也是合法值
+  const windowParam = searchParams.get("window");
+  const windowHours = (() => {
+    if (windowParam === null) return DEFAULT_WINDOW;
+    const n = Number(windowParam);
+    if (!Number.isFinite(n) || n < 0) return DEFAULT_WINDOW;
+    return n;
+  })();
 
   const [data, setData] = useState<TrackerStorylineResp | null>(null);
   const [loading, setLoading] = useState(true);
@@ -120,6 +206,9 @@ function TrackerPageContent() {
   const [subscribeMsg, setSubscribeMsg] = useState<string | null>(null);
   const [related, setRelated] = useState<RelatedTrackerResp | null>(null);
   const [subscriptionId, setSubscriptionId] = useState<number | null>(null);
+
+  // 把 items 按时间分组(今天/昨天/本周/更早),组内按热度倒序
+  const timeGroups = useMemo(() => groupByTime(data?.items ?? []), [data]);
 
   useEffect(() => {
     if (!term) {
@@ -161,6 +250,8 @@ function TrackerPageContent() {
       document.title = `${data.term} - Tracker - Newsfeed`;
     }
   }, [data]);
+
+  const timeGroups = useMemo(() => groupByTime(data?.items ?? []), [data?.items]);
 
   async function handleSubscribe() {
     if (!data?.term || submitting) return;
@@ -235,7 +326,7 @@ function TrackerPageContent() {
           <div>
             <h1 className="text-2xl font-semibold text-zinc-900 dark:text-zinc-100">{data.term}</h1>
             <p className="mt-1 text-sm text-zinc-500">
-              最近 {data.window.hours} 小时，共 {data.total_articles} 条相关文章
+              {windowLabel(data.window.hours)}内,共 {data.total_articles} 条相关文章
             </p>
           </div>
           <div className="flex flex-wrap gap-2 text-xs">
@@ -264,6 +355,31 @@ function TrackerPageContent() {
           </div>
         </div>
 
+        {/* 时间窗口 tab */}
+        <div className="mb-5 flex flex-wrap gap-1">
+          {WINDOW_OPTIONS.map((opt) => {
+            const active = data.window.hours === opt.hours;
+            return (
+              <button
+                key={opt.hours}
+                type="button"
+                onClick={() => {
+                  if (active) return;
+                  router.push(`/tracker?term=${encodeURIComponent(term)}&window=${opt.hours}`);
+                }}
+                className={
+                  "rounded-md px-3 py-1 text-xs transition " +
+                  (active
+                    ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
+                    : "bg-zinc-100 text-zinc-600 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-400 dark:hover:bg-zinc-700")
+                }
+              >
+                {opt.label}
+              </button>
+            );
+          })}
+        </div>
+
         {subscribeMsg && (
           <div className="mb-4 rounded-md border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm text-zinc-600 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-300">
             {subscribeMsg}
@@ -284,25 +400,63 @@ function TrackerPageContent() {
           ))}
         </div>
 
-        <div className="space-y-3 border-t border-zinc-200 pt-6 dark:border-zinc-800">
-          {data.items.map((item, index) => (
-            <Link
-              key={item.id}
-              href={`/article?id=${item.id}`}
-              className="block rounded-lg border border-zinc-200 bg-zinc-50 px-4 py-3 transition hover:border-zinc-300 hover:bg-white dark:border-zinc-800 dark:bg-zinc-950 dark:hover:border-zinc-700 dark:hover:bg-zinc-900"
-            >
-              <div className="flex items-start gap-3">
-                <span className="pt-0.5 font-mono text-xs text-zinc-400">{String(index + 1).padStart(2, "0")}</span>
-                <div className="min-w-0 flex-1">
-                  <div className="text-sm font-medium text-zinc-900 dark:text-zinc-100">{item.title}</div>
-                  <div className="mt-1 flex flex-wrap gap-2 text-[11px] text-zinc-500">
-                    <span>{SOURCE_LABELS[item.source_key] ?? item.source_key}</span>
-                    {(item.heat || item.heat_value > 0) && <span>{item.heat || formatHeat(item.heat_value)}</span>}
+        <div className="border-t border-zinc-200 pt-6 dark:border-zinc-800">
+          {data.items.length === 0 ? (
+            <div className="rounded-md border border-dashed border-zinc-300 p-8 text-center text-sm text-zinc-500 dark:border-zinc-700">
+              {windowLabel(data.window.hours)}内没有「{data.term}」的相关内容。
+              {data.window.hours !== 0 && (
+                <>
+                  {" "}
+                  <button
+                    type="button"
+                    onClick={() => router.push(`/tracker?term=${encodeURIComponent(term)}&window=0`)}
+                    className="text-blue-600 hover:underline dark:text-blue-400"
+                  >
+                    试试"全部"时间范围 →
+                  </button>
+                </>
+              )}
+            </div>
+          ) : (
+            <div className="space-y-6">
+              {timeGroups.map((g) => (
+                <div key={g.key}>
+                  <div className="mb-2 flex items-center gap-2">
+                    <h3 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">{g.label}</h3>
+                    <span className="text-xs text-zinc-400">{g.items.length} 条</span>
+                  </div>
+                  <div className="space-y-2">
+                    {g.items.map((item) => (
+                      <Link
+                        key={item.id}
+                        href={`/article?id=${item.id}`}
+                        className="flex items-start gap-3 rounded-lg border border-zinc-200 bg-zinc-50 px-4 py-3 transition hover:border-zinc-300 hover:bg-white dark:border-zinc-800 dark:bg-zinc-950 dark:hover:border-zinc-700 dark:hover:bg-zinc-900"
+                      >
+                        <div className="min-w-0 flex-1">
+                          <div className="text-sm font-medium leading-snug text-zinc-900 dark:text-zinc-100">
+                            {item.title}
+                          </div>
+                          <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-zinc-500">
+                            <span>{SOURCE_LABELS[item.source_key] ?? item.source_key}</span>
+                            <span>
+                              {g.key === "today" || g.key === "yesterday"
+                                ? formatTimeShort(item.published_at)
+                                : formatDateShort(item.published_at)}
+                            </span>
+                            {(item.heat || item.heat_value > 0) && (
+                              <span className="font-medium text-red-500 tabular-nums dark:text-red-400">
+                                {item.heat || formatHeat(item.heat_value)}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      </Link>
+                    ))}
                   </div>
                 </div>
-              </div>
-            </Link>
-          ))}
+              ))}
+            </div>
+          )}
         </div>
 
         {related && related.items.length > 0 && (
