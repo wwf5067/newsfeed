@@ -51,8 +51,8 @@ type zhihuHotResp struct {
 		Target struct {
 			ID         json.Number `json:"id"`
 			Title      string      `json:"title"`
-			URL        string      `json:"url"`         // API 形式: https://api.zhihu.com/questions/123
-			Created    int64       `json:"created"`     // 秒级时间戳
+			URL        string      `json:"url"`     // API 形式: https://api.zhihu.com/questions/123
+			Created    int64       `json:"created"` // 秒级时间戳
 			Excerpt    string      `json:"excerpt"`
 			AuthorName string      `json:"author_name"`
 		} `json:"target"`
@@ -86,7 +86,9 @@ func NewZhihuHot(cookie, schedule string) *ZhihuHot {
 func (z *ZhihuHot) Key() string      { return "zhihu_hot" }
 func (z *ZhihuHot) Schedule() string { return z.schedule }
 
-func (z *ZhihuHot) Fetch(ctx context.Context) ([]model.Article, error) {
+// FetchRaw 发起一次请求并返回原始响应 body。封装了通用的 ban 信号检测,
+// 供调试工具(如 cmd/zhihu-probe)直接观察未解析的 JSON。
+func (z *ZhihuHot) FetchRaw(ctx context.Context) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, zhihuHotAPI, nil)
 	if err != nil {
 		return nil, err
@@ -131,6 +133,15 @@ func (z *ZhihuHot) Fetch(ctx context.Context) ([]model.Article, error) {
 			snippet = snippet[:300]
 		}
 		return nil, fmt.Errorf("unexpected status %d: %s", resp.StatusCode, snippet)
+	}
+
+	return body, nil
+}
+
+func (z *ZhihuHot) Fetch(ctx context.Context) ([]model.Article, error) {
+	body, err := z.FetchRaw(ctx)
+	if err != nil {
+		return nil, err
 	}
 
 	var parsed zhihuHotResp
