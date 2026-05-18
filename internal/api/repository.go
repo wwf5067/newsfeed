@@ -131,6 +131,42 @@ WHERE id = $1
 	return &a, nil
 }
 
+// ListRecentArticles 拉最近 windowHours 小时内的文章,用于热点/实体聚合。
+func (r *Repository) ListRecentArticles(ctx context.Context, windowHours, limit int) ([]model.Article, error) {
+	if windowHours <= 0 || windowHours > 168 {
+		windowHours = 24
+	}
+	if limit <= 0 || limit > 500 {
+		limit = 200
+	}
+	const q = `
+SELECT id, source_key, url, title, content, author,
+       heat, heat_value, prev_heat, prev_heat_value,
+       published_at, fetched_at
+FROM articles
+WHERE fetched_at >= NOW() - make_interval(hours => $1)
+ORDER BY heat_value DESC NULLS LAST, published_at DESC
+LIMIT $2
+`
+	rows, err := r.pool.Query(ctx, q, windowHours, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []model.Article
+	for rows.Next() {
+		var a model.Article
+		if err := rows.Scan(&a.ID, &a.SourceKey, &a.URL, &a.Title, &a.Content,
+			&a.Author, &a.Heat, &a.HeatValue, &a.PrevHeat, &a.PrevHeatValue,
+			&a.PublishedAt, &a.FetchedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
 // HeatPoint 单个时序数据点(用于前端 sparkline)。
 type HeatPoint struct {
 	HeatValue  int64     `json:"heat_value"`

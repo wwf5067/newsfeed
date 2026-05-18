@@ -37,6 +37,27 @@ type Announcement = {
   is_active: boolean;
 };
 
+type TrackerTopic = {
+  label: string;
+  kind: "entity" | "keyword";
+  score: number;
+  count: number;
+  related_terms: string[];
+  sources: { source_key: string; count: number }[];
+  sample_article?: {
+    id: number;
+    title: string;
+    source_key: string;
+    heat: string;
+    heat_value: number;
+  };
+};
+
+type TrackerResp = {
+  window: { hours: number };
+  items: TrackerTopic[];
+};
+
 // 自动刷新间隔:5 分钟
 const POLL_INTERVAL_MS = 5 * 60 * 1000;
 // 首页每页条数。首屏保持轻量,需要时再继续展开。
@@ -84,6 +105,14 @@ async function fetchAnnouncements(): Promise<Announcement[]> {
   return data.items ?? [];
 }
 
+async function fetchTrackers(windowHours: number): Promise<TrackerResp> {
+  const params = new URLSearchParams({ window: String(windowHours), limit: "8" });
+  const res = await fetch(`/api/v1/trackers?${params.toString()}`, { cache: "no-store" });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const data: TrackerResp = await res.json();
+  return { window: data.window, items: data.items ?? [] };
+}
+
 function formatTime(iso: string): string {
   try {
     const d = new Date(iso);
@@ -124,6 +153,11 @@ function formatHeat(v: number): string {
 const HEAT_ICONS: Record<string, { icon: string; label: string }> = {
   zhihu_hot: { icon: "🔥", label: "热度" },
   bilibili_popular: { icon: "▶", label: "播放量" },
+};
+
+const SOURCE_LABELS: Record<string, string> = {
+  zhihu_hot: "知乎",
+  bilibili_popular: "B站",
 };
 
 function HeatBadge({
@@ -413,6 +447,131 @@ function AnnouncementBar() {
   );
 }
 
+function TrackerPanel({ onPickTerm }: { onPickTerm: (term: string) => void }) {
+  const [items, setItems] = useState<TrackerTopic[]>([]);
+  const [windowHours, setWindowHours] = useState(24);
+  const [selectedWindow, setSelectedWindow] = useState(24);
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const data = await fetchTrackers(selectedWindow);
+        if (cancelled) return;
+        setItems(data.items);
+        setWindowHours(data.window.hours);
+      } catch {
+        // 热点追踪失败不阻塞主列表
+      }
+    };
+    load();
+    const timer = setInterval(load, POLL_INTERVAL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [selectedWindow]);
+
+  if (items.length === 0) return null;
+
+  return (
+    <section className="mb-6 rounded-xl border border-zinc-200 bg-white p-4 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
+      <div className="mb-3 flex items-baseline justify-between gap-3">
+        <div>
+          <h2 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">热点追踪</h2>
+          <p className="text-xs text-zinc-500">基于最近 {windowHours} 小时内容自动聚合的实体和主题</p>
+        </div>
+        <div className="flex items-center gap-1">
+          {[6, 24, 72].map((window) => {
+            const active = selectedWindow === window;
+            return (
+              <button
+                key={window}
+                type="button"
+                onClick={() => setSelectedWindow(window)}
+                className={
+                  "rounded-full px-2 py-0.5 text-[11px] transition " +
+                  (active
+                    ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
+                    : "bg-zinc-100 text-zinc-500 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700")
+                }
+              >
+                {window}h
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      <div className="grid gap-3 md:grid-cols-2">
+        {items.map((item) => (
+          <div
+            key={`${item.kind}:${item.label}`}
+            className="rounded-lg border border-zinc-200 bg-zinc-50 p-3 dark:border-zinc-700 dark:bg-zinc-950"
+          >
+            <div className="mb-2 flex items-start justify-between gap-3">
+              <div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => onPickTerm(item.label)}
+                    className="text-sm font-semibold text-zinc-900 transition hover:text-amber-700 dark:text-zinc-100 dark:hover:text-amber-300"
+                  >
+                    {item.label}
+                  </button>
+                  <span className="rounded-full bg-zinc-200 px-2 py-0.5 text-[11px] text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300">
+                    {item.kind === "entity" ? "实体" : "话题"}
+                  </span>
+                </div>
+                <p className="mt-1 text-xs text-zinc-500">{item.count} 条相关内容</p>
+              </div>
+              <span className="text-xs font-medium tabular-nums text-emerald-600 dark:text-emerald-400">
+                {formatHeat(item.score)}
+              </span>
+            </div>
+
+            {item.sample_article && (
+              <Link
+                href={`/article?id=${item.sample_article.id}`}
+                className="mb-2 block rounded-md border border-transparent bg-white px-3 py-2 text-xs text-zinc-700 transition hover:border-zinc-300 hover:text-zinc-900 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:border-zinc-600 dark:hover:text-zinc-100"
+              >
+                <div className="line-clamp-2 font-medium">{item.sample_article.title}</div>
+                <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px] text-zinc-500">
+                  <span>{SOURCE_LABELS[item.sample_article.source_key] ?? item.sample_article.source_key}</span>
+                  {(item.sample_article.heat || item.sample_article.heat_value > 0) && (
+                    <span>{item.sample_article.heat || formatHeat(item.sample_article.heat_value)}</span>
+                  )}
+                </div>
+              </Link>
+            )}
+
+            <div className="flex flex-wrap gap-1.5 text-[11px] text-zinc-500">
+              {item.sources.map((source) => (
+                <span
+                  key={source.source_key}
+                  className="rounded-full bg-white px-2 py-0.5 dark:bg-zinc-900"
+                >
+                  {SOURCE_LABELS[source.source_key] ?? source.source_key} {source.count}
+                </span>
+              ))}
+              {item.related_terms.map((term) => (
+                <button
+                  key={term}
+                  type="button"
+                  onClick={() => onPickTerm(term)}
+                  className="rounded-full bg-amber-100 px-2 py-0.5 text-amber-700 transition hover:bg-amber-200 dark:bg-amber-950 dark:text-amber-300 dark:hover:bg-amber-900"
+                >
+                  {term}
+                </button>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 export default function Home() {
   const [articles, setArticles] = useState<Article[]>([]);
   const [total, setTotal] = useState(0);
@@ -469,6 +628,16 @@ export default function Home() {
       setToast(url);
     }
   }, []);
+
+  const handleTrackerPick = useCallback(
+    (term: string) => {
+      resetListing();
+      setSource("");
+      setQuery(term);
+      setDebouncedQ(term);
+    },
+    [resetListing]
+  );
 
   // 搜索框防抖
   useEffect(() => {
@@ -550,6 +719,7 @@ export default function Home() {
   return (
     <main className="mx-auto w-full max-w-3xl px-4 py-8">
       <AnnouncementBar />
+      <TrackerPanel onPickTerm={handleTrackerPick} />
       <header className="mb-6 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
         <h1 className="text-2xl font-semibold tracking-tight">Newsfeed</h1>
         <div className="flex items-baseline gap-3 text-sm text-zinc-500">

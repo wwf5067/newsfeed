@@ -145,6 +145,30 @@ func (h *Handler) ListAnnouncements(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"items": items})
 }
 
+func (h *Handler) ListTrackers(w http.ResponseWriter, r *http.Request) {
+	window := parseIntDefault(r.URL.Query().Get("window"), 24)
+	if window <= 0 || window > 168 {
+		window = 24
+	}
+	limit := parseIntDefault(r.URL.Query().Get("limit"), 12)
+	if limit <= 0 || limit > 30 {
+		limit = 12
+	}
+
+	articles, err := h.repo.ListRecentArticles(r.Context(), window, 300)
+	if err != nil {
+		h.logger.Error("list trackers", "err", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
+		return
+	}
+
+	items := buildTrackerTopics(articles, limit)
+	writeJSON(w, http.StatusOK, trackerResp{
+		Window: trackerWindow{Hours: window},
+		Items:  items,
+	})
+}
+
 // allowedSurgeWindows 限制窗口枚举,防止任意值导致非预期的 SQL 扫描区间。
 var allowedSurgeWindows = map[int]bool{1: true, 6: true, 24: true}
 
