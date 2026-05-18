@@ -180,7 +180,9 @@ func (z *ZhihuHot) setRandomHeaders(req *http.Request) {
 	req.Header.Set("User-Agent", userAgents[rand.Intn(len(userAgents))])
 	req.Header.Set("Accept", "application/json, text/plain, */*")
 	req.Header.Set("Accept-Language", acceptLanguages[rand.Intn(len(acceptLanguages))])
-	req.Header.Set("Accept-Encoding", "gzip, deflate, br")
+	// 故意不设置 Accept-Encoding:Go 的 http.Transport 在没显式指定时
+	// 会自动加 gzip 并对响应做透明解压。一旦自己设了,需要自己解压,
+	// 否则 json.Decode 直接吃到压缩字节流报 "invalid character" 错误。
 	req.Header.Set("Referer", referers[rand.Intn(len(referers))])
 
 	// 知乎前端常见的额外 header
