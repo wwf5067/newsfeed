@@ -165,9 +165,16 @@ jobs:
           sudo mkdir -p "$APP_DIR"
           sudo chown "$USER":"$USER" "$APP_DIR"
 
+          # 在解包之前,记录关键 mount 文件的 hash,用于解包后判断是否需要 restart 容器。
+          # 背景:nginx.conf / docker-compose.prod.yml 是 file mount,tar 解包会 unlink+create
+          # 换 inode,容器持有的旧 inode 看不到新内容,必须 restart 容器才能生效。
+          OLD_NGINX_HASH=$(sha256sum "$APP_DIR/nginx.conf" 2>/dev/null | cut -d' ' -f1 || echo "")
+
           # 解包配置
           tar -xzf /tmp/newsfeed-bundle.tar.gz -C "$APP_DIR"
           rm -f /tmp/newsfeed-bundle.tar.gz
+
+          NEW_NGINX_HASH=$(sha256sum "$APP_DIR/nginx.conf" 2>/dev/null | cut -d' ' -f1 || echo "")
 
           # ---- 前端原子更新 ----
           # 历史:之前 rm -rf web-dist + mkdir + tar 解包,会让 nginx 容器
@@ -201,9 +208,23 @@ jobs:
           docker compose -f docker-compose.prod.yml --progress plain pull
           # 迁移(失败则整体退出,避免 "表不存在" 这种隐性问题)
           docker compose -f docker-compose.prod.yml --progress plain --profile migrate run --rm migrate
+
+          # 先 up -d 把所有缺失的服务(尤其是首次部署的 nginx/postgres)拉起来,
+          # 已 Running 的服务是 no-op。
           docker compose -f docker-compose.prod.yml --progress plain up -d
-          # 不再 restart nginx —— 前端走 rsync 原地更新,inode 始终不变,
-          # nginx 自动看到新文件。docker-compose 配置变更才需要 restart。
+
+          # 强制重建 api/crawler。背景:之前几次 deploy 卡在 verify "image mismatch" ——
+          # `up -d` 改了 .env image tag 后,偶尔识别不到差异导致容器仍跑旧镜像。
+          # --force-recreate 保证容器一定换;--no-deps 防止顺带重建 postgres。
+          # 配合 nginx.conf 里的 resolver(10s TTL 自动跟新 IP),deploy 期间 502 可自愈。
+          docker compose -f docker-compose.prod.yml --progress plain up -d --force-recreate --no-deps api crawler
+
+          # nginx.conf 是 file mount,tar 解包会换 inode 让容器看不到新内容。
+          # 内容真变了才 restart,避免每次部署都白白抖一下 nginx。
+          if [ "$OLD_NGINX_HASH" != "$NEW_NGINX_HASH" ]; then
+            echo "==> nginx.conf changed ($OLD_NGINX_HASH -> $NEW_NGINX_HASH), restarting nginx"
+            docker compose -f docker-compose.prod.yml restart nginx
+          fi
           docker compose -f docker-compose.prod.yml ps
 
           # ---- 远端自检:确认容器真的换上了新镜像 + 服务能响应 ----
