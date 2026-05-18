@@ -78,6 +78,11 @@ const SOURCE_LABELS: Record<string, string> = {
   bilibili_popular: "B站",
 };
 
+const HEAT_ICONS: Record<string, { icon: string; label: string }> = {
+  zhihu_hot: { icon: "🔥", label: "热度" },
+  bilibili_popular: { icon: "▶", label: "播放量" },
+};
+
 const SOURCE_FILTERS: { key: string; label: string }[] = [
   { key: "", label: "全部" },
   { key: "zhihu_hot", label: "知乎" },
@@ -135,6 +140,59 @@ function formatRelativeTime(iso: string): string {
   } catch {
     return "";
   }
+}
+
+function formatTime(iso: string): string {
+  try {
+    return new Date(iso).toLocaleString("zh-CN", { hour12: false });
+  } catch {
+    return iso;
+  }
+}
+
+// ======================== HeatBadge ========================
+
+function HeatBadge({ sourceKey, heat, value, prevValue }: { sourceKey: string; heat: string; value: number; prevValue: number }) {
+  const main = heat || formatHeat(value);
+  if (!main) return null;
+  const meta = HEAT_ICONS[sourceKey] ?? { icon: "🔥", label: "热度" };
+  const isNew = prevValue === 0 && value > 0;
+  const hasTrend = !isNew && prevValue > 0 && value > 0 && value !== prevValue;
+  const diff = value - prevValue;
+  const up = diff > 0;
+  const trendText = hasTrend ? formatHeat(Math.abs(diff)) : "";
+  return (
+    <>
+      {isNew && (
+        <span className="inline-flex shrink-0 animate-pulse items-center rounded-full bg-red-600 px-1.5 py-0.5 text-[10px] font-bold leading-none text-white shadow-sm" title="首次上榜">NEW</span>
+      )}
+      <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-red-50 px-2 py-0.5 text-xs font-medium tabular-nums text-red-600 dark:bg-red-950 dark:text-red-400" title={meta.label}>
+        <span aria-hidden="true">{meta.icon}</span>
+        <span>{main}</span>
+        {hasTrend && (
+          <span className={up ? "text-emerald-600 dark:text-emerald-400" : "text-zinc-500 dark:text-zinc-400"} title={`${meta.label}相比上次${up ? "上升" : "下降"} ${trendText}`}>
+            {up ? "↑" : "↓"}{trendText}
+          </span>
+        )}
+      </span>
+    </>
+  );
+}
+
+// ======================== useIdSet (已读/收藏) ========================
+
+function useIdSet(storageKey: string) {
+  const [ids, setIds] = useState<Set<number>>(new Set());
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(storageKey);
+      if (raw) { const parsed = JSON.parse(raw); if (Array.isArray(parsed)) setIds(new Set(parsed.filter((x) => typeof x === "number"))); }
+    } catch { /* ignore */ }
+  }, [storageKey]);
+  const persist = useCallback((next: Set<number>) => { try { localStorage.setItem(storageKey, JSON.stringify([...next])); } catch { /* ignore */ } }, [storageKey]);
+  const add = useCallback((id: number) => { setIds((prev) => { if (prev.has(id)) return prev; const next = new Set(prev); next.add(id); persist(next); return next; }); }, [persist]);
+  const toggle = useCallback((id: number) => { setIds((prev) => { const next = new Set(prev); if (next.has(id)) next.delete(id); else next.add(id); persist(next); return next; }); }, [persist]);
+  return { ids, add, toggle };
 }
 
 // ======================== Announcement Bar ========================
@@ -409,6 +467,18 @@ export default function Home() {
   const [keywordInput, setKeywordInput] = useState("");
   const [subOpen, setSubOpen] = useState(false);
 
+  // 已读/收藏
+  const read = useIdSet("read_ids");
+  const starred = useIdSet("starred_ids");
+
+  // 分享
+  const [toast, setToast] = useState<string | null>(null);
+  useEffect(() => { if (!toast) return; const t = setTimeout(() => setToast(null), 2000); return () => clearTimeout(t); }, [toast]);
+  const copyShareLink = useCallback(async (id: number) => {
+    const url = `${window.location.origin}/share/${id}`;
+    try { await navigator.clipboard.writeText(url); setToast("分享链接已复制"); } catch { setToast(url); }
+  }, []);
+
   // 搜索防抖
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -487,6 +557,22 @@ export default function Home() {
     const ungrouped = articles.filter((a) => !usedIds.has(a.id));
     return { grouped, ungrouped };
   }, [articles, topics, isTopicView]);
+
+  // 同源 Top 10 排名
+  const topIdsBySource = useMemo(() => {
+    const bySource = new Map<string, Article[]>();
+    for (const a of articles) { const list = bySource.get(a.source_key) ?? []; list.push(a); bySource.set(a.source_key, list); }
+    const top = new Map<number, number>();
+    for (const list of bySource.values()) { list.filter((a) => a.heat_value > 0).sort((x, y) => y.heat_value - x.heat_value).slice(0, 10).forEach((a, idx) => top.set(a.id, idx + 1)); }
+    return top;
+  }, [articles]);
+
+  // 飙升判定
+  function isSurging(a: Article): boolean {
+    if (a.heat_value <= 0) return false;
+    if (a.prev_heat_value <= 0) return topIdsBySource.has(a.id);
+    return (a.heat_value - a.prev_heat_value) / a.prev_heat_value >= 0.1;
+  }
 
   const handleSourceChange = (key: string) => {
     if (source === key) return;
@@ -650,13 +736,46 @@ export default function Home() {
           )}
         </>
       ) : (
-        /* ========== 知乎/B站/搜索: 按时间排序的紧凑列表 ========== */
+        /* ========== 知乎/B站/搜索: 卡片式时间流 ========== */
         articles.length > 0 && (
-          <div className="rounded-lg border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900">
-            {articles.map((a, i) => (
-              <ArticleRow key={a.id} article={a} index={i} />
-            ))}
-          </div>
+          <ul className="space-y-3">
+            {articles.map((a, i) => {
+              const isRead = read.ids.has(a.id);
+              const isStarred = starred.ids.has(a.id);
+              return (
+                <li key={a.id} className={"relative rounded-lg border bg-white p-4 shadow-sm transition hover:shadow-md dark:bg-zinc-900 " + (isStarred ? "border-zinc-200 border-l-4 border-l-amber-400 dark:border-zinc-800 dark:border-l-amber-500" : "border-zinc-200 dark:border-zinc-800") + (isRead ? " opacity-60" : "")}>
+                  <button type="button" onClick={(e) => { e.preventDefault(); e.stopPropagation(); starred.toggle(a.id); }} aria-label={isStarred ? "取消收藏" : "收藏"} className={"absolute right-3 top-3 rounded p-1 text-base transition " + (isStarred ? "text-amber-500" : "text-zinc-300 hover:text-amber-500 dark:text-zinc-600")}>
+                    {isStarred ? "★" : "☆"}
+                  </button>
+                  <button type="button" onClick={(e) => { e.preventDefault(); e.stopPropagation(); copyShareLink(a.id); }} aria-label="复制分享链接" className="absolute right-9 top-3 rounded p-1 text-sm text-zinc-300 transition hover:text-zinc-700 dark:text-zinc-600 dark:hover:text-zinc-200">
+                    ↗
+                  </button>
+                  <Link href={`/article?id=${a.id}`} onClick={() => read.add(a.id)} className="flex gap-3">
+                    <span className="shrink-0 select-none font-mono text-sm text-zinc-400 tabular-nums">{String(i + 1).padStart(2, "0")}</span>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 pr-16">
+                        <h2 className={"text-base font-medium leading-snug hover:underline " + (isRead ? "text-zinc-500 dark:text-zinc-500" : "text-zinc-900 dark:text-zinc-100")}>{a.title}</h2>
+                        {(a.heat || a.heat_value > 0) && <HeatBadge sourceKey={a.source_key} heat={a.heat} value={a.heat_value} prevValue={a.prev_heat_value} />}
+                        {topIdsBySource.has(a.id) && (
+                          <span className="inline-flex shrink-0 items-center gap-0.5 rounded-full bg-amber-100 px-1.5 py-0.5 text-xs font-medium text-amber-700 dark:bg-amber-950 dark:text-amber-400" title={`同源 Top ${topIdsBySource.get(a.id)}`}>
+                            🏆<span className="font-semibold tabular-nums">{topIdsBySource.get(a.id)}</span>
+                          </span>
+                        )}
+                        {isSurging(a) && (
+                          <span className="inline-flex shrink-0 items-center rounded-full bg-orange-100 px-1.5 py-0.5 text-xs font-medium text-orange-700 dark:bg-orange-950 dark:text-orange-400" title="飙升">🚀</span>
+                        )}
+                      </div>
+                      {a.content && <p className="mt-1.5 line-clamp-2 text-[13px] leading-relaxed text-zinc-600 dark:text-zinc-400">{a.content}</p>}
+                      <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-zinc-500">
+                        <span>{SOURCE_LABELS[a.source_key] ?? a.source_key}</span>
+                        <span>{formatTime(a.published_at)}</span>
+                      </div>
+                    </div>
+                  </Link>
+                </li>
+              );
+            })}
+          </ul>
         )
       )}
 
@@ -671,6 +790,12 @@ export default function Home() {
           >
             {loadingMore ? "加载中…" : `加载更多 (${articles.length}/${total})`}
           </button>
+        </div>
+      )}
+
+      {toast && (
+        <div role="status" className="fixed bottom-6 left-1/2 z-50 -translate-x-1/2 rounded-md bg-zinc-900 px-4 py-2 text-sm text-white shadow-lg dark:bg-zinc-100 dark:text-zinc-900">
+          {toast}
         </div>
       )}
     </main>
