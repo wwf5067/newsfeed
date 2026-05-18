@@ -71,6 +71,17 @@ services:
       ZHIHU_SCHEDULE: ${ZHIHU_SCHEDULE:-0 */30 * * * *}
       RUN_ON_START: ${RUN_ON_START:-false}
       RETENTION_DAYS: ${RETENTION_DAYS:-30}
+      # 每日名言 job(crawler 内,默认每天 8:00)
+      QUOTES_SCHEDULE: ${QUOTES_SCHEDULE:-0 0 8 * * *}
+      # 每日精选邮件 job(SMTP_HOST/DIGEST_TO 任一为空则不启用)
+      DIGEST_SCHEDULE: ${DIGEST_SCHEDULE:-0 0 8 * * *}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-465}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASS: ${SMTP_PASS:-}
+      SMTP_FROM: ${SMTP_FROM:-}
+      DIGEST_TO: ${DIGEST_TO:-}
+      SITE_URL: ${SITE_URL:-http://82.156.10.221}
     depends_on:
       postgres:
         condition: service_healthy
