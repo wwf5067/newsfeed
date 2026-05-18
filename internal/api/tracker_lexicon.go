@@ -1,5 +1,7 @@
 package api
 
+import "strings"
+
 // trackerEntityLexicon 是第一版人工维护的专用实体词典。
 // 目标不是追求“大而全”，而是优先覆盖当前产品里高频、用户感知强的实体，
 // 让 tracker 在 AI / 科技公司 / 内容平台 / 游戏 IP 这些场景里先稳定下来。
@@ -60,7 +62,9 @@ var trackerEntityTermsByLabel = buildTrackerEntityTermsByLabel(trackerEntityLexi
 func buildTrackerEntityLabelSet(entries []trackerLexiconEntry) map[string]struct{} {
 	set := make(map[string]struct{}, len(entries))
 	for _, entry := range entries {
-		label := normalizeTrackerToken(entry.Label)
+		// 不使用 normalizeTrackerToken(会引发初始化循环依赖),直接用 TrimSpace 后的 Label。
+		// Lexicon 的 Label 都是人工维护的规范形式,不需要额外标准化。
+		label := strings.TrimSpace(entry.Label)
 		if label == "" {
 			continue
 		}
