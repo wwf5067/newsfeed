@@ -225,7 +225,7 @@ func (r *Runner) purge() {
 
 // runQuotesJob 一次"换今日名言"流程:
 //  1. 软删此前 active 的 quote 公告(只动 level='quote',运维公告不受影响)
-//  2. 从内置库随机挑 2 条插入,ends_at 设为下一轮 cron 后 1 小时(漂移容错)
+//  2. 从内置库随机挑 1 条插入,ends_at 设为下一轮 cron 后 1 小时(漂移容错)
 //
 // 任一步失败都只记 error,不阻塞下一步,保证最大努力可用性。
 func (r *Runner) runQuotesJob() {
@@ -241,7 +241,7 @@ func (r *Runner) runQuotesJob() {
 		log.Info("deactivated previous quotes", "count", n)
 	}
 
-	picks := quotes.PickN(2)
+	picks := quotes.PickN(1)
 	// 25h 给每天一次的 cron 留 1h 漂移容错;若 cron 漏跑,旧名言也会自然过期消失
 	endsAt := time.Now().Add(25 * time.Hour)
 	for _, q := range picks {
