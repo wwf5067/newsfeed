@@ -18,6 +18,11 @@ type Article = {
   fetched_at: string;
 };
 
+type HeatPoint = {
+  heat_value: number;
+  captured_at: string;
+};
+
 const SOURCE_LABELS: Record<string, string> = {
   zhihu_hot: "知乎",
   bilibili_popular: "B站",
@@ -31,9 +36,66 @@ function formatTime(iso: string): string {
   }
 }
 
+// Sparkline 用纯 SVG 画热度时序。30 行代码,不引图表库。
+// width/height 固定,viewBox 让线条按数据范围自适应。
+function Sparkline({ points }: { points: HeatPoint[] }) {
+  if (points.length < 2) {
+    return (
+      <div className="text-xs text-zinc-500">
+        {points.length === 0 ? "暂无热度历史数据" : "数据点不足,需要至少 2 次抓取"}
+      </div>
+    );
+  }
+  const W = 600;
+  const H = 60;
+  const PAD = 4;
+  const values = points.map((p) => p.heat_value);
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const range = max - min || 1; // 防除零
+  const stepX = (W - PAD * 2) / (points.length - 1);
+  const path = points
+    .map((p, i) => {
+      const x = PAD + i * stepX;
+      const y = H - PAD - ((p.heat_value - min) / range) * (H - PAD * 2);
+      return `${i === 0 ? "M" : "L"}${x.toFixed(1)},${y.toFixed(1)}`;
+    })
+    .join(" ");
+  const last = points[points.length - 1];
+  const first = points[0];
+  const trend = last.heat_value - first.heat_value;
+  const up = trend > 0;
+  return (
+    <div>
+      <svg
+        viewBox={`0 0 ${W} ${H}`}
+        className="w-full"
+        preserveAspectRatio="none"
+        aria-label="热度时序"
+      >
+        <path
+          d={path}
+          fill="none"
+          stroke={up ? "#10b981" : "#71717a"}
+          strokeWidth="1.5"
+          vectorEffect="non-scaling-stroke"
+        />
+      </svg>
+      <div className="mt-1 flex justify-between text-xs text-zinc-500">
+        <span>{new Date(first.captured_at).toLocaleString("zh-CN", { hour12: false })}</span>
+        <span className={up ? "text-emerald-600" : "text-zinc-500"}>
+          {up ? "↑" : trend < 0 ? "↓" : "·"} {Math.abs(trend).toLocaleString()}
+        </span>
+        <span>{new Date(last.captured_at).toLocaleString("zh-CN", { hour12: false })}</span>
+      </div>
+    </div>
+  );
+}
+
 export default function ArticlePage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const [article, setArticle] = useState<Article | null>(null);
+  const [history, setHistory] = useState<HeatPoint[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -41,14 +103,22 @@ export default function ArticlePage({ params }: { params: Promise<{ id: string }
     let cancelled = false;
     (async () => {
       try {
-        const res = await fetch(`/api/v1/articles/${id}`, { cache: "no-store" });
-        if (res.status === 404) {
+        const [aRes, hRes] = await Promise.all([
+          fetch(`/api/v1/articles/${id}`, { cache: "no-store" }),
+          fetch(`/api/v1/articles/${id}/heat-history?limit=48`, { cache: "no-store" }),
+        ]);
+        if (aRes.status === 404) {
           if (!cancelled) setError("not_found");
           return;
         }
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const data: Article = await res.json();
+        if (!aRes.ok) throw new Error(`HTTP ${aRes.status}`);
+        const data: Article = await aRes.json();
         if (!cancelled) setArticle(data);
+        // heat history 失败不阻塞文章展示
+        if (hRes.ok) {
+          const hData: { items: HeatPoint[] } = await hRes.json();
+          if (!cancelled) setHistory(hData.items ?? []);
+        }
       } catch (e) {
         if (!cancelled) setError(String(e));
       } finally {
@@ -132,6 +202,13 @@ export default function ArticlePage({ params }: { params: Promise<{ id: string }
             {article.content}
           </p>
         )}
+
+        <div className="mb-6 border-t border-zinc-200 pt-4 dark:border-zinc-800">
+          <h2 className="mb-3 text-sm font-medium text-zinc-700 dark:text-zinc-300">
+            热度趋势
+          </h2>
+          <Sparkline points={history} />
+        </div>
 
         <div className="border-t border-zinc-200 pt-4 dark:border-zinc-800">
           <a

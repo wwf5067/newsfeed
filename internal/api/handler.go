@@ -87,6 +87,34 @@ func (h *Handler) GetArticleByID(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, a)
 }
 
+// GetHeatHistory 返回某文章的热度时序(最近 N 条 snapshot,正序)。
+// 前端用于画 sparkline。
+func (h *Handler) GetHeatHistory(w http.ResponseWriter, r *http.Request) {
+	idStr := chi.URLParam(r, "id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil || id <= 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid id"})
+		return
+	}
+	limit := parseIntDefault(r.URL.Query().Get("limit"), 48)
+	if limit <= 0 || limit > 500 {
+		limit = 48
+	}
+	points, err := h.repo.GetHeatHistory(r.Context(), id, limit)
+	if err != nil {
+		h.logger.Error("get heat history", "id", id, "err", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
+		return
+	}
+	if points == nil {
+		points = []HeatPoint{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"items": points,
+		"limit": limit,
+	})
+}
+
 // ListAnnouncements 返回当前生效的公告。无分页,公告量不大。
 // 响应里若无活跃公告,items 归一为空数组而非 null,简化前端处理。
 func (h *Handler) ListAnnouncements(w http.ResponseWriter, r *http.Request) {

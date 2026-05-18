@@ -23,6 +23,7 @@ func NewRouter(h *Handler) http.Handler {
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Get("/articles", h.ListArticles)
 		r.Get("/articles/{id}", h.GetArticleByID)
+		r.Get("/articles/{id}/heat-history", h.GetHeatHistory)
 		r.Get("/announcements", h.ListAnnouncements)
 		r.Get("/feed.xml", h.FeedRSS)
 	})

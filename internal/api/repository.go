@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/wwf5067/newsfeed/internal/model"
@@ -92,6 +93,46 @@ WHERE id = $1
 		return nil, err
 	}
 	return &a, nil
+}
+
+// HeatPoint 单个时序数据点(用于前端 sparkline)。
+type HeatPoint struct {
+	HeatValue  int64     `json:"heat_value"`
+	CapturedAt time.Time `json:"captured_at"`
+}
+
+// GetHeatHistory 拉某条文章最近 limit 条 heat snapshot,按时间正序返回(便于前端直接画线)。
+// limit 应由调用方限制在合理范围(如 48 = 24h × 30min)。
+func (r *Repository) GetHeatHistory(ctx context.Context, articleID int64, limit int) ([]HeatPoint, error) {
+	if limit <= 0 || limit > 500 {
+		limit = 48
+	}
+	// 子查询拿最近 N 条(降序),再外层按时间升序;前端无需反转
+	const q = `
+SELECT heat_value, captured_at FROM (
+    SELECT heat_value, captured_at
+    FROM article_heat_snapshots
+    WHERE article_id = $1
+    ORDER BY captured_at DESC
+    LIMIT $2
+) sub
+ORDER BY captured_at ASC
+`
+	rows, err := r.pool.Query(ctx, q, articleID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []HeatPoint
+	for rows.Next() {
+		var p HeatPoint
+		if err := rows.Scan(&p.HeatValue, &p.CapturedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
 }
 
 // ListActiveAnnouncements 返回当前生效的公告(按 priority 降序、创建时间倒序)。
