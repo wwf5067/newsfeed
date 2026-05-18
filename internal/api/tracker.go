@@ -279,28 +279,40 @@ func extractTrackerCandidates(article model.Article) []trackerCandidate {
 
 	ordered := make([]string, 0, 8)
 	poolSeen := map[string]struct{}{}
+
+	// 1. 词典扫描:整段标题不区分大小写匹配 lexicon 别名,优先级最高。
+	//    覆盖大多数高频实体(OpenAI / 小米 / 字节跳动 / 马斯克 / 流浪地球…)。
 	collectTrackerLexiconMatches(title, &ordered, poolSeen)
-	segments := trackerTitleSplitRegex.Split(title, -1)
-	for _, segment := range segments {
-		normalized := normalizeTrackerToken(segment)
-		if normalized != "" {
-			appendTrackerPool(&ordered, poolSeen, normalized)
+
+	// 2. 中文分词:用 gse 把标题切成词序列。canonicalizeTrackerToken 会:
+	//    a) 在 alias 索引精确命中时还原 Label("小米su7" → "小米SU7")
+	//    b) 在 lower-case 索引兜底时还原大小写("openai" → "OpenAI")
+	//    c) 没命中则保留原 token,让后续 normalize/keep 流水线判断
+	//    分词器加载失败时返回 nil,继续走 step 3 的兜底路径。
+	for _, tok := range segmentTitle(title) {
+		normalized := normalizeTrackerToken(tok)
+		if normalized == "" {
+			continue
 		}
-		for _, token := range trackerTokenRegex.FindAllString(segment, -1) {
-			normalized = normalizeTrackerToken(token)
-			if normalized == "" {
-				continue
-			}
-			appendTrackerPool(&ordered, poolSeen, normalized)
-		}
+		appendTrackerPool(&ordered, poolSeen, normalized)
 	}
+
+	// 3. 兜底:gse 加载失败 / segment 没产出 / 上面两步都没产出时,
+	//    用原"按标点切 + ASCII token 正则"扫一遍。日常很少进这条分支。
 	if len(ordered) == 0 {
-		for _, token := range trackerTokenRegex.FindAllString(title, -1) {
-			normalized := normalizeTrackerToken(token)
-			if normalized == "" {
-				continue
+		segments := trackerTitleSplitRegex.Split(title, -1)
+		for _, segment := range segments {
+			normalized := normalizeTrackerToken(segment)
+			if normalized != "" {
+				appendTrackerPool(&ordered, poolSeen, normalized)
 			}
-			appendTrackerPool(&ordered, poolSeen, normalized)
+			for _, token := range trackerTokenRegex.FindAllString(segment, -1) {
+				normalized = normalizeTrackerToken(token)
+				if normalized == "" {
+					continue
+				}
+				appendTrackerPool(&ordered, poolSeen, normalized)
+			}
 		}
 	}
 	if len(ordered) == 0 {
@@ -347,20 +359,37 @@ func canonicalizeTrackerToken(token string) string {
 	if label, ok := trackerEntityAliasToLabel[token]; ok {
 		return label
 	}
+	// gse 分词把英文/混合 token 全转小写(openai / gpt-5),走 lower-case 索引兜底
+	if label, ok := trackerEntityAliasToLabelLower[strings.ToLower(token)]; ok {
+		return label
+	}
 	return token
+}
+
+// normalizeLexiconAlias 给 lexicon 别名索引专用的轻量 normalizer。
+// 只 trim 前后空白和包裹符号,不做内容过滤。这样纯数字别名(315/618)、
+// 短词(B站)等都能进索引。区别于 normalizeTrackerToken 用于"用户输入或抽出 token
+// 的过滤"——那里要过滤纯数字防止"500 万热度"里的"500"被认成实体。
+func normalizeLexiconAlias(alias string) string {
+	alias = strings.TrimSpace(alias)
+	alias = strings.Trim(alias, "#.,!?:;，。！？：；（）()[]【】《》\"'“”‘’·-")
+	return strings.TrimSpace(alias)
 }
 
 func buildTrackerEntityAliasIndex(entries []trackerLexiconEntry) []trackerLexiconAlias {
 	out := make([]trackerLexiconAlias, 0, len(entries)*3)
 	seen := map[string]struct{}{}
 	for _, entry := range entries {
-		label := normalizeTrackerToken(entry.Label)
+		// 用轻量 normalizer:lexicon 数据是人工维护的规范形式,
+		// 不能走 normalizeTrackerToken 的"纯数字过滤/最小长度"等输入侧规则,
+		// 否则像 315/618/B站 这种合法 alias 会被吃掉
+		label := normalizeLexiconAlias(entry.Label)
 		if label == "" {
 			continue
 		}
 		aliases := append([]string{label}, entry.Aliases...)
 		for _, alias := range aliases {
-			needle := normalizeTrackerToken(alias)
+			needle := normalizeLexiconAlias(alias)
 			if needle == "" {
 				continue
 			}

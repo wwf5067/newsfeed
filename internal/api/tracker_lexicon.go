@@ -152,9 +152,9 @@ var trackerEntityLexicon = []trackerLexiconEntry{
 	{Label: "奥运会", Category: "event", Aliases: []string{"奥运会", "奥运", "Olympics", "olympics", "巴黎奥运", "洛杉矶奥运"}},
 	{Label: "亚运会", Category: "event", Aliases: []string{"亚运会", "亚运"}},
 	{Label: "冬奥会", Category: "event", Aliases: []string{"冬奥会", "冬奥"}},
-	{Label: "315", Category: "event", Aliases: []string{"315晚会", "3·15", "三一五"}},
+	{Label: "315晚会", Category: "event", Aliases: []string{"315晚会", "315", "3·15", "三一五"}},
 	{Label: "双11", Category: "event", Aliases: []string{"双11", "双十一", "双 11"}},
-	{Label: "618", Category: "event", Aliases: []string{"618", "618大促"}},
+	{Label: "618大促", Category: "event", Aliases: []string{"618大促", "618"}},
 	{Label: "高考", Category: "event", Aliases: []string{"高考"}},
 	{Label: "考研", Category: "event", Aliases: []string{"考研"}},
 	{Label: "春节", Category: "event", Aliases: []string{"春节", "过年"}},
@@ -177,6 +177,10 @@ var trackerEntityLabelSet = buildTrackerEntityLabelSet(trackerEntityLexicon)
 
 var trackerEntityAliasToLabel = buildTrackerEntityAliasToLabel(trackerEntityLexicon)
 
+// trackerEntityAliasToLabelLower 是 alias→label 的不区分大小写索引。
+// 给 gse 分词时的小写化结果(openai / gpt-5)走 fallback 还原回规范 Label(OpenAI / GPT-5)。
+var trackerEntityAliasToLabelLower = buildTrackerEntityAliasToLabelLower(trackerEntityLexicon)
+
 var trackerEntityTermsByLabel = buildTrackerEntityTermsByLabel(trackerEntityLexicon)
 
 func buildTrackerEntityLabelSet(entries []trackerLexiconEntry) map[string]struct{} {
@@ -196,13 +200,13 @@ func buildTrackerEntityLabelSet(entries []trackerLexiconEntry) map[string]struct
 func buildTrackerEntityAliasToLabel(entries []trackerLexiconEntry) map[string]string {
 	out := make(map[string]string, len(entries)*4)
 	for _, entry := range entries {
-		label := normalizeTrackerToken(entry.Label)
+		label := normalizeLexiconAlias(entry.Label)
 		if label == "" {
 			continue
 		}
 		out[label] = label
 		for _, alias := range entry.Aliases {
-			needle := normalizeTrackerToken(alias)
+			needle := normalizeLexiconAlias(alias)
 			if needle == "" {
 				continue
 			}
@@ -212,17 +216,39 @@ func buildTrackerEntityAliasToLabel(entries []trackerLexiconEntry) map[string]st
 	return out
 }
 
+// buildTrackerEntityAliasToLabelLower 跟 AliasToLabel 同源,但 key 全部 lower-case,
+// 用于 gse 分词后小写 token 的反查(如 "openai" → "OpenAI")。
+// 冲突时后写覆盖前写(实际 lexicon 里别名不会真冲突)。
+func buildTrackerEntityAliasToLabelLower(entries []trackerLexiconEntry) map[string]string {
+	out := make(map[string]string, len(entries)*4)
+	for _, entry := range entries {
+		label := normalizeLexiconAlias(entry.Label)
+		if label == "" {
+			continue
+		}
+		out[strings.ToLower(label)] = label
+		for _, alias := range entry.Aliases {
+			needle := normalizeLexiconAlias(alias)
+			if needle == "" {
+				continue
+			}
+			out[strings.ToLower(needle)] = label
+		}
+	}
+	return out
+}
+
 func buildTrackerEntityTermsByLabel(entries []trackerLexiconEntry) map[string][]string {
 	out := make(map[string][]string, len(entries))
 	for _, entry := range entries {
-		label := normalizeTrackerToken(entry.Label)
+		label := normalizeLexiconAlias(entry.Label)
 		if label == "" {
 			continue
 		}
 		seen := map[string]struct{}{label: {}}
 		terms := []string{label}
 		for _, alias := range entry.Aliases {
-			needle := normalizeTrackerToken(alias)
+			needle := normalizeLexiconAlias(alias)
 			if needle == "" {
 				continue
 			}
