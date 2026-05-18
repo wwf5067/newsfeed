@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/robfig/cron/v3"
+
+	"github.com/wwf5067/newsfeed/internal/crawler/quotes"
 )
 
 // SourceHealth 记录某个 Source 的运行健康状态。
@@ -31,15 +33,27 @@ type Runner struct {
 	health map[string]*SourceHealth
 
 	retentionDays int // 文章保留天数,<=0 表示不清理
+
+	// 每日名言 job(可选,nil 时不启用)
+	announcementsRepo *AnnouncementsRepository
+	quotesSchedule    string // cron 表达式,空字符串则不注册
 }
 
-func NewRunner(logger *slog.Logger, repo *Repository, retentionDays int) *Runner {
+func NewRunner(
+	logger *slog.Logger,
+	repo *Repository,
+	announcementsRepo *AnnouncementsRepository,
+	retentionDays int,
+	quotesSchedule string,
+) *Runner {
 	return &Runner{
-		logger:        logger,
-		repo:          repo,
-		cron:          cron.New(cron.WithSeconds()),
-		health:        make(map[string]*SourceHealth),
-		retentionDays: retentionDays,
+		logger:            logger,
+		repo:              repo,
+		cron:              cron.New(cron.WithSeconds()),
+		health:            make(map[string]*SourceHealth),
+		retentionDays:     retentionDays,
+		announcementsRepo: announcementsRepo,
+		quotesSchedule:    quotesSchedule,
 	}
 }
 
@@ -89,6 +103,17 @@ func (r *Runner) Start() {
 			r.logger.Info("purge job registered", "retention_days", r.retentionDays, "schedule", "03:00 daily")
 		}
 	}
+
+	// 注册每日名言 job(配置完整才启用)
+	if r.announcementsRepo != nil && r.quotesSchedule != "" {
+		_, err := r.cron.AddFunc(r.quotesSchedule, r.runQuotesJob)
+		if err != nil {
+			r.logger.Error("register quotes job", "err", err)
+		} else {
+			r.logger.Info("quotes job registered", "schedule", r.quotesSchedule)
+		}
+	}
+
 	r.cron.Start()
 }
 
@@ -177,6 +202,40 @@ func (r *Runner) purge() {
 		return
 	}
 	r.logger.Info("purge done", "retention_days", r.retentionDays, "deleted", deleted)
+}
+
+// runQuotesJob 一次"换今日名言"流程:
+//  1. 软删此前 active 的 quote 公告(只动 level='quote',运维公告不受影响)
+//  2. 从内置库随机挑 2 条插入,ends_at 设为下一轮 cron 后 1 小时(漂移容错)
+//
+// 任一步失败都只记 error,不阻塞下一步,保证最大努力可用性。
+func (r *Runner) runQuotesJob() {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	log := r.logger.With("job", "quotes")
+	log.Info("quotes refresh started")
+
+	if n, err := r.announcementsRepo.DeactivateActiveQuotes(ctx); err != nil {
+		log.Error("deactivate previous quotes failed", "err", err)
+	} else {
+		log.Info("deactivated previous quotes", "count", n)
+	}
+
+	picks := quotes.PickN(2)
+	// 25h 给每天一次的 cron 留 1h 漂移容错;若 cron 漏跑,旧名言也会自然过期消失
+	endsAt := time.Now().Add(25 * time.Hour)
+	for _, q := range picks {
+		text := q.Text
+		if q.Source != "" {
+			text = fmt.Sprintf("%s —— %s", q.Text, q.Source)
+		}
+		if id, err := r.announcementsRepo.InsertQuote(ctx, text, &endsAt); err != nil {
+			log.Error("insert quote failed", "err", err)
+		} else {
+			log.Info("quote inserted", "id", id)
+		}
+	}
 }
 
 // getBackoffUntil 读取某 Source 当前的退避截止时间。

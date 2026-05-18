@@ -36,7 +36,8 @@ func main() {
 	defer pool.Close()
 
 	repo := crawler.NewRepository(pool)
-	runner := crawler.NewRunner(log, repo, cfg.RetentionDays)
+	announcementsRepo := crawler.NewAnnouncementsRepository(pool)
+	runner := crawler.NewRunner(log, repo, announcementsRepo, cfg.RetentionDays, cfg.QuotesSchedule)
 
 	// 显式注册数据源。新增源 = 在这里加一行。
 	// 没配置必需凭据的源会被跳过,不影响其它源运行。

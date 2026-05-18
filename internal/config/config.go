@@ -30,6 +30,9 @@ type Config struct {
 	ZhihuCookie   string
 	ZhihuSchedule string // cron 表达式(支持秒),默认 30 分钟一次
 
+	// 每日名言 job:从内置库随机选 2 条以 announcements 形式发布
+	QuotesSchedule string // cron 表达式(支持秒),默认每天 8:00
+
 	// 调试开关:启动时立即执行一次所有源(不等 cron 触发)
 	RunOnStart bool
 
@@ -49,6 +52,7 @@ func Load() (*Config, error) {
 		CrawlerAddr:     getEnv("CRAWLER_ADDR", "127.0.0.1:8081"),
 		ZhihuCookie:     os.Getenv("ZHIHU_COOKIE"),
 		ZhihuSchedule:   getEnv("ZHIHU_SCHEDULE", "0 */30 * * * *"),
+		QuotesSchedule:  getEnv("QUOTES_SCHEDULE", "0 0 8 * * *"),
 		RunOnStart:      strings.EqualFold(os.Getenv("RUN_ON_START"), "true"),
 		RetentionDays:   getEnvInt("RETENTION_DAYS", 30),
 	}

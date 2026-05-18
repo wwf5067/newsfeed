@@ -23,7 +23,7 @@ type ListResp = {
 type Announcement = {
   id: number;
   content: string;
-  level: "info" | "warn" | "critical";
+  level: "info" | "warn" | "critical" | "quote";
   priority: number;
   starts_at: string;
   ends_at: string | null;
@@ -72,10 +72,12 @@ function formatRelativeTime(date: Date): string {
 }
 
 // level → Tailwind class 映射。深色模式自动适配。
+// quote 是 crawler 每日轮询发布的名言,用中性偏文艺的紫灰区分于通知类。
 const LEVEL_CLASSES: Record<Announcement["level"], string> = {
   info: "border-blue-200 bg-blue-50 text-blue-800 dark:border-blue-800 dark:bg-blue-950 dark:text-blue-300",
   warn: "border-yellow-200 bg-yellow-50 text-yellow-800 dark:border-yellow-800 dark:bg-yellow-950 dark:text-yellow-300",
   critical: "border-red-200 bg-red-50 text-red-800 dark:border-red-800 dark:bg-red-950 dark:text-red-300",
+  quote: "border-zinc-200 bg-zinc-50 text-zinc-700 italic dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300",
 };
 
 function readDismissed(): number[] {
