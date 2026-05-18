@@ -2,27 +2,26 @@
 //
 // 设计:
 //   - 跨包引 internal/api 的只读 Repository,避免在 crawler 包重写一份 SELECT
-//   - SMTP 走 stdlib net/smtp + crypto/tls 的 SMTPS(465 端口),QQ/163 都支持
+//   - SMTP 发送复用 internal/mailer 共享实现(QQ/163 SMTPS 都支持)
 //   - 失败优雅降级:logger.Error 记日志,绝不 panic、不阻塞下一次 cron
 package digest
 
 import (
 	"bytes"
 	"context"
-	"crypto/tls"
-	"encoding/base64"
 	"fmt"
 	"html/template"
 	"log/slog"
-	"net/smtp"
 	"sort"
 	"time"
 
 	"github.com/wwf5067/newsfeed/internal/api"
+	"github.com/wwf5067/newsfeed/internal/mailer"
 	"github.com/wwf5067/newsfeed/internal/model"
 )
 
 // SMTPConfig SMTP 凭据集合,从 config 包传进来。
+// 保留 SiteURL 字段(邮件正文里拼绝对链接用),因此不能直接用 mailer.Config。
 type SMTPConfig struct {
 	Host    string
 	Port    int
@@ -30,7 +29,7 @@ type SMTPConfig struct {
 	Pass    string
 	From    string
 	To      string
-	SiteURL string // 邮件正文里拼绝对链接用
+	SiteURL string
 }
 
 // Digest 每日精选邮件发送器。
@@ -79,7 +78,11 @@ func (d *Digest) Run(ctx context.Context) {
 	}
 
 	subject := fmt.Sprintf("Newsfeed 每日精选 - %s", time.Now().Format("2006-01-02"))
-	if err := d.send(subject, body); err != nil {
+	if err := mailer.Send(mailer.Config{
+		Host: d.smtp.Host, Port: d.smtp.Port,
+		User: d.smtp.User, Pass: d.smtp.Pass,
+		From: d.smtp.From, To: d.smtp.To,
+	}, subject, body); err != nil {
 		d.logger.Error("send mail", "err", err)
 		return
 	}
@@ -96,7 +99,7 @@ const digestTpl = `<!DOCTYPE html>
 <ol style="padding-left:24px">
 {{range .Items}}
 <li style="margin-bottom:16px">
-  <a href="{{$.SiteURL}}/article/{{.ID}}" style="font-size:16px;color:#18181b;text-decoration:none;font-weight:500">{{.Title}}</a>
+  <a href="{{$.SiteURL}}/article?id={{.ID}}" style="font-size:16px;color:#18181b;text-decoration:none;font-weight:500">{{.Title}}</a>
   <div style="color:#888;font-size:13px;margin-top:4px">
     {{.SourceKey}}{{if .Heat}} · {{.Heat}}{{end}}{{if .Author}} · {{.Author}}{{end}}
   </div>
@@ -137,82 +140,4 @@ func excerptOf(s string, n int) string {
 		return s
 	}
 	return string(r[:n]) + "…"
-}
-
-// send 通过 SMTPS(隐式 TLS,通常 465 端口)发邮件。
-//
-// 这里没用 smtp.SendMail,因为它对 QQ 邮箱不友好(QQ 要求一上来就 TLS,
-// SendMail 默认走 STARTTLS)。直接 tls.Dial → smtp.NewClient 走显式流程。
-func (d *Digest) send(subject, htmlBody string) error {
-	addr := fmt.Sprintf("%s:%d", d.smtp.Host, d.smtp.Port)
-	tlsCfg := &tls.Config{ServerName: d.smtp.Host}
-
-	conn, err := tls.Dial("tcp", addr, tlsCfg)
-	if err != nil {
-		return fmt.Errorf("tls dial: %w", err)
-	}
-	defer conn.Close()
-
-	c, err := smtp.NewClient(conn, d.smtp.Host)
-	if err != nil {
-		return fmt.Errorf("smtp new client: %w", err)
-	}
-	defer c.Quit()
-
-	auth := smtp.PlainAuth("", d.smtp.User, d.smtp.Pass, d.smtp.Host)
-	if err := c.Auth(auth); err != nil {
-		return fmt.Errorf("auth: %w", err)
-	}
-	if err := c.Mail(d.smtp.From); err != nil {
-		return fmt.Errorf("mail from: %w", err)
-	}
-	if err := c.Rcpt(d.smtp.To); err != nil {
-		return fmt.Errorf("rcpt: %w", err)
-	}
-	w, err := c.Data()
-	if err != nil {
-		return fmt.Errorf("data: %w", err)
-	}
-	defer w.Close()
-
-	// MIME header + body。Subject 用 RFC2047 base64 编码避免中文乱码。
-	msg := buildMessage(d.smtp.From, d.smtp.To, subject, htmlBody)
-	if _, err := w.Write([]byte(msg)); err != nil {
-		return fmt.Errorf("write body: %w", err)
-	}
-	return nil
-}
-
-// buildMessage 拼一封 RFC5322 + MIME HTML 邮件。
-// 中文 Subject 用 =?UTF-8?B?...?= base64 编码,保证客户端正确显示。
-func buildMessage(from, to, subject, htmlBody string) string {
-	encSubject := mimeEncode(subject)
-	headers := []string{
-		"From: " + from,
-		"To: " + to,
-		"Subject: " + encSubject,
-		"MIME-Version: 1.0",
-		"Content-Type: text/html; charset=UTF-8",
-		"Content-Transfer-Encoding: 8bit",
-		"Date: " + time.Now().Format(time.RFC1123Z),
-	}
-	var b bytes.Buffer
-	for _, h := range headers {
-		b.WriteString(h)
-		b.WriteString("\r\n")
-	}
-	b.WriteString("\r\n")
-	b.WriteString(htmlBody)
-	return b.String()
-}
-
-// mimeEncode 把任意 string 编码成 RFC2047 形式,保证非 ASCII 在邮件 header 里正确显示。
-// 全 ASCII 直接返回避免无意义编码;含非 ASCII 时走 =?UTF-8?B?...?= base64。
-func mimeEncode(s string) string {
-	for _, r := range s {
-		if r > 127 {
-			return "=?UTF-8?B?" + base64.StdEncoding.EncodeToString([]byte(s)) + "?="
-		}
-	}
-	return s
 }

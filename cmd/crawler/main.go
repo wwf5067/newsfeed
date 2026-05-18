@@ -17,7 +17,9 @@ import (
 	"github.com/wwf5067/newsfeed/internal/crawler/digest"
 	"github.com/wwf5067/newsfeed/internal/crawler/sources"
 	"github.com/wwf5067/newsfeed/internal/logger"
+	"github.com/wwf5067/newsfeed/internal/mailer"
 	"github.com/wwf5067/newsfeed/internal/storage"
+	"github.com/wwf5067/newsfeed/internal/subscribe"
 )
 
 func main() {
@@ -59,7 +61,24 @@ func main() {
 		log.Warn("digest job skipped: SMTP_HOST or DIGEST_TO empty")
 	}
 
-	runner := crawler.NewRunner(log, repo, announcementsRepo, cfg.RetentionDays, cfg.QuotesSchedule, digestJob, cfg.DigestSchedule)
+	// 关键词订阅匹配器:抓完一个源后调,命中关键词聚合发邮件。
+	// SMTP 没配齐 matcher 也注册,只是会"登记去重不发邮件"——避免后续配上 SMTP
+	// 后突然把过去命中过的旧文章批量补发(matcher.go 里的处理)。
+	subRepo := subscribe.NewRepository(pool)
+	subscribeMatcher := subscribe.New(log, subRepo, mailer.Config{
+		Host: cfg.SMTPHost, Port: cfg.SMTPPort,
+		User: cfg.SMTPUser, Pass: cfg.SMTPPass,
+		From: cfg.SMTPFrom, To: cfg.DigestTo,
+	}, cfg.SiteURL)
+	log.Info("subscribe matcher configured", "smtp_ready", cfg.SMTPHost != "" && cfg.DigestTo != "")
+
+	runner := crawler.NewRunner(
+		log, repo, announcementsRepo,
+		cfg.RetentionDays,
+		cfg.QuotesSchedule,
+		digestJob, cfg.DigestSchedule,
+		subscribeMatcher,
+	)
 
 	// 显式注册数据源。新增源 = 在这里加一行。
 	// 没配置必需凭据的源会被跳过,不影响其它源运行。

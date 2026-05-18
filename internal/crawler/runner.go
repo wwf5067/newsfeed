@@ -13,6 +13,7 @@ import (
 
 	"github.com/wwf5067/newsfeed/internal/crawler/digest"
 	"github.com/wwf5067/newsfeed/internal/crawler/quotes"
+	"github.com/wwf5067/newsfeed/internal/subscribe"
 )
 
 // SourceHealth 记录某个 Source 的运行健康状态。
@@ -42,6 +43,10 @@ type Runner struct {
 	// 每日精选邮件 job(可选,digest=nil 时不启用)
 	digest         *digest.Digest
 	digestSchedule string
+
+	// 关键词订阅匹配器(可选,nil 时不启用)。
+	// 抓完一个源就调一次,把"本轮新增 article id"传给它。
+	subscribe *subscribe.Matcher
 }
 
 func NewRunner(
@@ -52,6 +57,7 @@ func NewRunner(
 	quotesSchedule string,
 	digestJob *digest.Digest,
 	digestSchedule string,
+	subscribeMatcher *subscribe.Matcher,
 ) *Runner {
 	return &Runner{
 		logger:            logger,
@@ -63,6 +69,7 @@ func NewRunner(
 		quotesSchedule:    quotesSchedule,
 		digest:            digestJob,
 		digestSchedule:    digestSchedule,
+		subscribe:         subscribeMatcher,
 	}
 }
 
@@ -188,15 +195,17 @@ func (r *Runner) runOnce(s Source) {
 	}
 
 	var inserted, updated int
+	var newIDs []int64
 	for _, a := range articles {
 		a.SourceKey = s.Key()
-		isNew, err := r.repo.UpsertArticle(ctx, a)
+		id, isNew, err := r.repo.UpsertArticle(ctx, a)
 		if err != nil {
 			log.Error("upsert failed", "url", a.URL, "err", err)
 			continue
 		}
 		if isNew {
 			inserted++
+			newIDs = append(newIDs, id)
 		} else {
 			updated++
 		}
@@ -209,6 +218,14 @@ func (r *Runner) runOnce(s Source) {
 		"inserted", inserted,
 		"updated", updated,
 		"elapsed", time.Since(start))
+
+	// 抓完后跑订阅匹配:有新文章 + matcher 已注册才执行。
+	// 用独立 ctx 防止 fetch 的 timeout 限制邮件发送(SMTP 有时要 10+ 秒)。
+	if r.subscribe != nil && len(newIDs) > 0 {
+		matchCtx, matchCancel := context.WithTimeout(context.Background(), 60*time.Second)
+		r.subscribe.HandleNewArticles(matchCtx, newIDs)
+		matchCancel()
+	}
 }
 
 func (r *Runner) purge() {

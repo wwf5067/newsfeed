@@ -48,10 +48,6 @@ const DISMISSED_KEY = "dismissed_announcements";
 // localStorage 键:已读 / 收藏的文章 id
 const READ_KEY = "read_ids";
 const STARRED_KEY = "starred_ids";
-// 关键词订阅:string[],新内容到达时本地匹配 title/content 命中即弹桌面通知
-const KEYWORDS_KEY = "keyword_subscriptions";
-// 通知开关(用户主动同意过 Notification API 才会触发)
-const NOTIFY_ENABLED_KEY = "notify_enabled";
 
 // 源 tab 配置。新增源时在此追加一项。
 const SOURCES: { key: string; label: string }[] = [
@@ -250,61 +246,80 @@ function useIdSet(storageKey: string) {
   return { ids, add, toggle };
 }
 
-// useStringSet 跟 useIdSet 同构,只是元素是 string(去前后空白 + 不区分大小写)。
-// 用于关键词订阅:add 时归一化、空字符串忽略。
-function useStringSet(storageKey: string) {
-  const [items, setItems] = useState<string[]>([]);
+// useSubscriptions 走后端 /api/v1/subscriptions 管理关键词订阅。
+// 替代了原先 localStorage + Web Notification 的本地方案——
+// 后端命中后会发邮件,所以手机/关闭浏览器也能收到。
+//
+// 状态:
+//   items     当前订阅的关键词列表(后端返回)
+//   notifyTo  邮件发往的邮箱(已模糊化展示)
+//   loading   true 表示首次加载未完成,避免界面闪烁"还没订阅"
+//   error     接口错误时展示给用户
+type Subscription = { id: number; keyword: string; created_at: string };
+
+function useSubscriptions() {
+  const [items, setItems] = useState<Subscription[]>([]);
+  const [notifyTo, setNotifyTo] = useState<string>("");
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const refresh = useCallback(async () => {
+    try {
+      const res = await fetch("/api/v1/subscriptions", { cache: "no-store" });
+      if (res.status === 503) {
+        setError("订阅功能未启用");
+        setLoading(false);
+        return;
+      }
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data: { items: Subscription[]; notify_to: string } = await res.json();
+      setItems(data.items ?? []);
+      setNotifyTo(data.notify_to ?? "");
+      setError(null);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
-    try {
-      const raw = localStorage.getItem(storageKey);
-      if (!raw) return;
-      const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed)) {
-        setItems(parsed.filter((x) => typeof x === "string" && x.length > 0));
-      }
-    } catch {
-      // ignore
-    }
-  }, [storageKey]);
-
-  const persist = useCallback(
-    (next: string[]) => {
-      try {
-        localStorage.setItem(storageKey, JSON.stringify(next));
-      } catch {
-        // ignore
-      }
-    },
-    [storageKey]
-  );
+    refresh();
+  }, [refresh]);
 
   const add = useCallback(
-    (raw: string) => {
+    async (raw: string) => {
       const v = raw.trim();
       if (!v) return;
-      setItems((prev) => {
-        if (prev.some((x) => x.toLowerCase() === v.toLowerCase())) return prev;
-        const next = [...prev, v];
-        persist(next);
-        return next;
-      });
+      try {
+        const res = await fetch("/api/v1/subscriptions", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ keyword: v }),
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        await refresh();
+      } catch (e) {
+        setError(String(e));
+      }
     },
-    [persist]
+    [refresh]
   );
 
   const remove = useCallback(
-    (v: string) => {
-      setItems((prev) => {
-        const next = prev.filter((x) => x !== v);
-        persist(next);
-        return next;
-      });
+    async (id: number) => {
+      try {
+        const res = await fetch(`/api/v1/subscriptions/${id}`, { method: "DELETE" });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        await refresh();
+      } catch (e) {
+        setError(String(e));
+      }
     },
-    [persist]
+    [refresh]
   );
 
-  return { items, add, remove };
+  return { items, notifyTo, loading, error, add, remove };
 }
 
 // level → Tailwind class 映射。深色模式自动适配。
@@ -426,39 +441,10 @@ export default function Home() {
   const read = useIdSet(READ_KEY);
   const starred = useIdSet(STARRED_KEY);
 
-  // 关键词订阅 + 通知开关
-  const keywords = useStringSet(KEYWORDS_KEY);
+  // 关键词订阅:走后端 API,命中后服务端发邮件(替代了原先的桌面通知)。
+  const subs = useSubscriptions();
   const [keywordInput, setKeywordInput] = useState("");
   const [subOpen, setSubOpen] = useState(false);
-  const [notifyEnabled, setNotifyEnabled] = useState(false);
-  const [notifySupported, setNotifySupported] = useState(true);
-
-  // 同步浏览器通知权限 + 用户开关到组件状态
-  useEffect(() => {
-    if (typeof window === "undefined" || !("Notification" in window)) {
-      setNotifySupported(false);
-      return;
-    }
-    const stored = localStorage.getItem(NOTIFY_ENABLED_KEY) === "true";
-    setNotifyEnabled(stored && Notification.permission === "granted");
-  }, []);
-
-  const toggleNotify = useCallback(async () => {
-    if (typeof window === "undefined" || !("Notification" in window)) return;
-    if (notifyEnabled) {
-      setNotifyEnabled(false);
-      localStorage.setItem(NOTIFY_ENABLED_KEY, "false");
-      return;
-    }
-    let perm = Notification.permission;
-    if (perm === "default") {
-      perm = await Notification.requestPermission();
-    }
-    if (perm === "granted") {
-      setNotifyEnabled(true);
-      localStorage.setItem(NOTIFY_ENABLED_KEY, "true");
-    }
-  }, [notifyEnabled]);
 
   // 全局 toast(短暂提示,如"分享链接已复制")
   const [toast, setToast] = useState<string | null>(null);
@@ -485,62 +471,12 @@ export default function Home() {
     return () => clearTimeout(timer);
   }, [query]);
 
-  // 上次已知的 article id 集合,用于检测"新增"条目以触发关键词通知
-  const prevIdsRef = useRef<Set<number>>(new Set());
-
-  // 检测新增条目并匹配关键词,命中则弹桌面通知。
-  // 仅匹配本次返回的 50 条(决策 4A:不打额外请求);首次加载不弹(避免页面打开瞬间炸通知)。
-  const matchAndNotify = useCallback(
-    (items: Article[]) => {
-      if (!notifyEnabled || keywords.items.length === 0) {
-        // 仍要更新 prevIds,否则下次 toggle 通知后会把所有当前条目当"新增"
-        prevIdsRef.current = new Set(items.map((a) => a.id));
-        return;
-      }
-      // 首次加载:initialLoad.current 此时仍为 true(在 finally 里才置 false)
-      if (initialLoad.current) {
-        prevIdsRef.current = new Set(items.map((a) => a.id));
-        return;
-      }
-      const prev = prevIdsRef.current;
-      const newOnes = items.filter((a) => !prev.has(a.id));
-      prevIdsRef.current = new Set(items.map((a) => a.id));
-      if (newOnes.length === 0) return;
-      const lowered = keywords.items.map((k) => k.toLowerCase());
-      for (const a of newOnes) {
-        const haystack = (a.title + " " + a.content).toLowerCase();
-        const hit = lowered.find((k) => haystack.includes(k));
-        if (!hit) continue;
-        try {
-          const n = new Notification(`Newsfeed:命中关键词 "${hit}"`, {
-            body: a.title,
-            tag: `newsfeed-${a.id}`, // 同一文章只弹一次,新通知会替换旧的
-          });
-          n.onclick = () => {
-            window.focus();
-            window.location.href = `/article?id=${a.id}`;
-          };
-        } catch {
-          // 通知失败(权限被撤销等)→ 静默
-        }
-      }
-    },
-    [notifyEnabled, keywords.items]
-  );
-
   const refresh = useCallback(async () => {
     try {
       const items =
         mode === "surging"
           ? await fetchSurging(source, surgeWindow)
           : await fetchArticles(source, debouncedQ);
-      // 关键词通知只在 latest 模式跑:飙升榜的"新增"语义跟通知预期不符,
-      // 比如同一条文章因为热度涨了再次进榜并不是"新内容到达"。
-      if (mode === "latest") {
-        matchAndNotify(items);
-      } else {
-        prevIdsRef.current = new Set(items.map((a) => a.id));
-      }
       setArticles(items);
       setLastUpdated(new Date());
       setError(null);
@@ -555,7 +491,7 @@ export default function Home() {
         initialLoad.current = false;
       }
     }
-  }, [mode, source, debouncedQ, surgeWindow, matchAndNotify]);
+  }, [mode, source, debouncedQ, surgeWindow]);
 
   useEffect(() => {
     refresh();
@@ -667,35 +603,43 @@ export default function Home() {
         )}
       </div>
 
-      {/* 关键词订阅区(默认折叠) */}
+      {/* 邮件订阅区(默认折叠)。
+          命中后由后端发邮件,跨设备/关浏览器都能收到——不再依赖本机的 Notification API。*/}
       <div className="mb-4 text-sm">
         <button
           type="button"
           onClick={() => setSubOpen((v) => !v)}
           className="text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100"
         >
-          🔔 关键词订阅
-          {keywords.items.length > 0 && (
-            <span className="ml-1 text-xs text-zinc-400">({keywords.items.length})</span>
+          📧 邮件订阅
+          {subs.items.length > 0 && (
+            <span className="ml-1 text-xs text-zinc-400">({subs.items.length})</span>
           )}
           <span className="ml-1 text-xs">{subOpen ? "▴" : "▾"}</span>
         </button>
         {subOpen && (
           <div className="mt-2 rounded-md border border-zinc-200 bg-zinc-50 p-3 dark:border-zinc-800 dark:bg-zinc-900">
+            {subs.error && (
+              <div className="mb-2 rounded bg-red-50 px-2 py-1 text-xs text-red-700 dark:bg-red-950 dark:text-red-300">
+                {subs.error}
+              </div>
+            )}
             <div className="mb-2 flex flex-wrap gap-2">
-              {keywords.items.length === 0 ? (
+              {subs.loading ? (
+                <span className="text-xs text-zinc-500">加载中…</span>
+              ) : subs.items.length === 0 ? (
                 <span className="text-xs text-zinc-500">还没有订阅关键词</span>
               ) : (
-                keywords.items.map((k) => (
+                subs.items.map((s) => (
                   <span
-                    key={k}
+                    key={s.id}
                     className="inline-flex items-center gap-1 rounded-full bg-zinc-200 px-2 py-0.5 text-xs text-zinc-700 dark:bg-zinc-700 dark:text-zinc-200"
                   >
-                    {k}
+                    {s.keyword}
                     <button
                       type="button"
-                      onClick={() => keywords.remove(k)}
-                      aria-label={`移除 ${k}`}
+                      onClick={() => subs.remove(s.id)}
+                      aria-label={`移除 ${s.keyword}`}
                       className="text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100"
                     >
                       ×
@@ -707,7 +651,8 @@ export default function Home() {
             <form
               onSubmit={(e) => {
                 e.preventDefault();
-                keywords.add(keywordInput);
+                if (!keywordInput.trim()) return;
+                subs.add(keywordInput);
                 setKeywordInput("");
               }}
               className="flex gap-2"
@@ -726,24 +671,10 @@ export default function Home() {
                 添加
               </button>
             </form>
-            <div className="mt-3 flex items-center justify-between text-xs text-zinc-500">
-              {notifySupported ? (
-                <button
-                  type="button"
-                  onClick={toggleNotify}
-                  className={
-                    "rounded px-2 py-1 transition " +
-                    (notifyEnabled
-                      ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-400"
-                      : "bg-zinc-200 text-zinc-600 hover:bg-zinc-300 dark:bg-zinc-800 dark:text-zinc-400")
-                  }
-                >
-                  {notifyEnabled ? "✓ 通知已开启" : "开启桌面通知"}
-                </button>
-              ) : (
-                <span>当前浏览器不支持桌面通知,关键词命中无法弹提示</span>
-              )}
-              <span>每 5 分钟轮询一次新内容</span>
+            <div className="mt-3 text-xs text-zinc-500">
+              {subs.notifyTo
+                ? <>命中后会发邮件到 <span className="font-mono">{subs.notifyTo}</span>,延迟约等于抓取间隔(30 分钟内)</>
+                : "未配置收件邮箱(SMTP_HOST / DIGEST_TO)。后端命中仍会登记去重,配上之后从下次开始发送。"}
             </div>
           </div>
         )}

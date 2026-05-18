@@ -27,6 +27,11 @@ func NewRouter(h *Handler) http.Handler {
 		r.Get("/articles/{id}/heat-history", h.GetHeatHistory)
 		r.Get("/announcements", h.ListAnnouncements)
 		r.Get("/feed.xml", h.FeedRSS)
+
+		// 关键词订阅 CRUD。无鉴权,部署时由 nginx 层做访问控制(IP 白名单/basic auth)。
+		r.Get("/subscriptions", h.ListSubscriptions)
+		r.Post("/subscriptions", h.AddSubscription)
+		r.Delete("/subscriptions/{id}", h.DeleteSubscription)
 	})
 
 	return r

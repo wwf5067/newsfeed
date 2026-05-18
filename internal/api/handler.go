@@ -11,16 +11,28 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
 	"github.com/wwf5067/newsfeed/internal/model"
+	"github.com/wwf5067/newsfeed/internal/subscribe"
 )
 
 // Handler 聚合所有 HTTP 处理器的依赖。
 type Handler struct {
-	logger *slog.Logger
-	repo   *Repository
+	logger        *slog.Logger
+	repo          *Repository
+	subscribeRepo *subscribe.Repository // 可选;nil 时订阅 API 返回 503
+	notifyTo      string                // 用于在 list 响应里提示用户邮件发往哪里
 }
 
+// NewHandler 默认构造,不带订阅功能。
 func NewHandler(logger *slog.Logger, repo *Repository) *Handler {
 	return &Handler{logger: logger, repo: repo}
+}
+
+// WithSubscribe 注入订阅依赖。返回 *Handler 自身便于链式调用。
+// notifyTo 是 .env 里的 DIGEST_TO,前端展示用(会在响应里做模糊处理)。
+func (h *Handler) WithSubscribe(repo *subscribe.Repository, notifyTo string) *Handler {
+	h.subscribeRepo = repo
+	h.notifyTo = notifyTo
+	return h
 }
 
 func (h *Handler) Health(w http.ResponseWriter, _ *http.Request) {
@@ -180,6 +192,14 @@ func writeJSON(w http.ResponseWriter, status int, body any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(body)
+}
+
+// decodeJSON 限制 body 大小到 64KB,防止异常 payload 撑爆内存。
+func decodeJSON(r *http.Request, dst any) error {
+	r.Body = http.MaxBytesReader(nil, r.Body, 64*1024)
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	return dec.Decode(dst)
 }
 
 func parseIntDefault(s string, def int) int {

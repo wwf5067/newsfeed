@@ -13,6 +13,7 @@ import (
 	"github.com/wwf5067/newsfeed/internal/config"
 	"github.com/wwf5067/newsfeed/internal/logger"
 	"github.com/wwf5067/newsfeed/internal/storage"
+	"github.com/wwf5067/newsfeed/internal/subscribe"
 )
 
 func main() {
@@ -33,7 +34,8 @@ func main() {
 	defer pool.Close()
 
 	repo := api.NewRepository(pool)
-	handler := api.NewHandler(log, repo)
+	subRepo := subscribe.NewRepository(pool)
+	handler := api.NewHandler(log, repo).WithSubscribe(subRepo, cfg.DigestTo)
 
 	srv := &http.Server{
 		Addr:         cfg.APIAddr,

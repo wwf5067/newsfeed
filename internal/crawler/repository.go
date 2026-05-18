@@ -20,14 +20,16 @@ func NewRepository(pool *pgxpool.Pool) *Repository {
 // UpsertArticle 按 url 唯一约束去重写入,并多写一条 heat snapshot 用于趋势图。
 // 若 url 已存在,更新 title/content/author/heat/published_at/fetched_at,
 // 并把上一次的 heat / heat_value 搬到 prev_* 字段(用于前端展示趋势)。
-// 返回值 inserted=true 表示新插入,false 表示更新已有记录。
+// 返回值:
+//   - id:文章主键(无论新插入还是更新都返回)
+//   - inserted=true 表示新插入,false 表示更新已有记录
 //
 // articles UPSERT 和 snapshot INSERT 包在同一事务里,保证一致性:
 // 失败回滚,绝不出现"主表更新成功但 snapshot 缺失"的状态。
-func (r *Repository) UpsertArticle(ctx context.Context, a model.Article) (inserted bool, err error) {
+func (r *Repository) UpsertArticle(ctx context.Context, a model.Article) (id int64, inserted bool, err error) {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
-		return false, err
+		return 0, false, err
 	}
 	defer func() {
 		// 任何错误回滚;成功 commit 后这次 rollback 是 no-op
@@ -49,14 +51,11 @@ ON CONFLICT (url) DO UPDATE SET
     fetched_at      = NOW()
 RETURNING id, (xmax = 0) AS is_new
 `
-	var (
-		id    int64
-		isNew bool
-	)
+	var isNew bool
 	if err := tx.QueryRow(ctx, upsertQ,
 		a.SourceKey, a.URL, a.Title, a.Content, a.Author, a.Heat, a.HeatValue, a.PublishedAt,
 	).Scan(&id, &isNew); err != nil {
-		return false, err
+		return 0, false, err
 	}
 
 	// 写 snapshot:同一秒内重复触发(理论不会但保险)走 ON CONFLICT DO NOTHING
@@ -66,13 +65,13 @@ VALUES ($1, $2)
 ON CONFLICT (article_id, captured_at) DO NOTHING
 `
 	if _, err := tx.Exec(ctx, snapshotQ, id, a.HeatValue); err != nil {
-		return false, err
+		return 0, false, err
 	}
 
 	if err := tx.Commit(ctx); err != nil {
-		return false, err
+		return 0, false, err
 	}
-	return isNew, nil
+	return id, isNew, nil
 }
 
 // PurgeOldArticles 删除 fetched_at 早于 days 天前的文章,返回被删除的行数。
