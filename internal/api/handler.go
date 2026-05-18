@@ -42,7 +42,7 @@ func (h *Handler) Health(w http.ResponseWriter, _ *http.Request) {
 func (h *Handler) ListArticles(w http.ResponseWriter, r *http.Request) {
 	limit := parseIntDefault(r.URL.Query().Get("limit"), 20)
 	offset := parseIntDefault(r.URL.Query().Get("offset"), 0)
-	if limit <= 0 || limit > 100 {
+	if limit <= 0 || limit > 200 {
 		limit = 20
 	}
 	if offset < 0 {
@@ -59,7 +59,7 @@ func (h *Handler) ListArticles(w http.ResponseWriter, r *http.Request) {
 		source = ""
 	}
 
-	articles, err := h.repo.ListArticles(r.Context(), limit, offset, q, source)
+	articles, total, err := h.repo.ListArticlesPage(r.Context(), limit, offset, q, source)
 	if err != nil {
 		h.logger.Error("list articles", "err", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
@@ -70,11 +70,14 @@ func (h *Handler) ListArticles(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"items":  articles,
-		"limit":  limit,
-		"offset": offset,
-		"q":      q,
-		"source": source,
+		"items":       articles,
+		"limit":       limit,
+		"offset":      offset,
+		"total":       total,
+		"has_more":    offset+len(articles) < total,
+		"next_offset": offset + len(articles),
+		"q":           q,
+		"source":      source,
 	})
 }
 

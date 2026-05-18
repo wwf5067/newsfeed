@@ -19,10 +19,7 @@ func NewRepository(pool *pgxpool.Pool) *Repository {
 	return &Repository{pool: pool}
 }
 
-// ListArticles 分页查询。
-// query 非空时按 title/content ILIKE 过滤;sourceKey 非空时按源精确匹配。
-// 当前数据量(几千行 + 30 天 retention)ILIKE 完全跑得动,等量级到十万再考虑全文索引。
-func (r *Repository) ListArticles(ctx context.Context, limit, offset int, query, sourceKey string) ([]model.Article, error) {
+func buildArticleWhereClause(query, sourceKey string) (string, []any) {
 	var (
 		conds []string
 		args  []any
@@ -38,11 +35,18 @@ func (r *Repository) ListArticles(ctx context.Context, limit, offset int, query,
 		conds = append(conds, fmt.Sprintf("(title ILIKE $%d OR content ILIKE $%d)", idx, idx))
 	}
 
-	where := ""
-	if len(conds) > 0 {
-		where = "WHERE " + strings.Join(conds, " AND ")
+	if len(conds) == 0 {
+		return "", args
 	}
+	return "WHERE " + strings.Join(conds, " AND "), args
+}
 
+func (r *Repository) queryArticles(
+	ctx context.Context,
+	where string,
+	args []any,
+	limit, offset int,
+) ([]model.Article, error) {
 	args = append(args, limit, offset)
 	limitIdx, offsetIdx := len(args)-1, len(args)
 	q := fmt.Sprintf(`
@@ -72,6 +76,38 @@ LIMIT $%d OFFSET $%d
 		out = append(out, a)
 	}
 	return out, rows.Err()
+}
+
+// ListArticlesPage 返回分页数据和命中的总数,用于前端“加载更多”。
+func (r *Repository) ListArticlesPage(
+	ctx context.Context,
+	limit, offset int,
+	query, sourceKey string,
+) ([]model.Article, int, error) {
+	where, args := buildArticleWhereClause(query, sourceKey)
+
+	countQ := fmt.Sprintf(`SELECT COUNT(*) FROM articles %s`, where)
+	var total int
+	if err := r.pool.QueryRow(ctx, countQ, args...).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+	if total == 0 {
+		return []model.Article{}, 0, nil
+	}
+
+	items, err := r.queryArticles(ctx, where, args, limit, offset)
+	if err != nil {
+		return nil, 0, err
+	}
+	return items, total, nil
+}
+
+// ListArticles 分页查询。
+// query 非空时按 title/content ILIKE 过滤;sourceKey 非空时按源精确匹配。
+// 当前数据量(几千行 + 30 天 retention)ILIKE 完全跑得动,等量级到十万再考虑全文索引。
+func (r *Repository) ListArticles(ctx context.Context, limit, offset int, query, sourceKey string) ([]model.Article, error) {
+	where, args := buildArticleWhereClause(query, sourceKey)
+	return r.queryArticles(ctx, where, args, limit, offset)
 }
 
 // GetArticle 按主键查单条文章。未命中返回 pgx.ErrNoRows,上层据此转 404。

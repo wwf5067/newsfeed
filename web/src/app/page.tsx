@@ -22,6 +22,9 @@ type ListResp = {
   items: Article[];
   limit: number;
   offset: number;
+  total: number;
+  has_more: boolean;
+  next_offset: number;
 };
 
 type Announcement = {
@@ -36,6 +39,8 @@ type Announcement = {
 
 // 自动刷新间隔:5 分钟
 const POLL_INTERVAL_MS = 5 * 60 * 1000;
+// 首页每页条数。首屏保持轻量,需要时再继续展开。
+const PAGE_SIZE = 30;
 // 公告刷新间隔:10 分钟(变更频率远低于文章)
 const ANNOUNCEMENT_POLL_MS = 10 * 60 * 1000;
 // 搜索框防抖:300ms
@@ -56,14 +61,20 @@ const SOURCES: { key: string; label: string }[] = [
 // 静态导出时不能用 SSR,所以走 client fetch。
 // 开发环境由 next.config rewrites 代理到 localhost:8080,
 // 生产环境由 Nginx 反代,前端永远访问相对路径 /api/v1/*。
-async function fetchArticles(source: string, q: string): Promise<Article[]> {
-  const params = new URLSearchParams({ limit: "50" });
+async function fetchArticles(source: string, q: string, limit: number, offset = 0): Promise<ListResp> {
+  const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
   if (source) params.set("source", source);
   if (q) params.set("q", q);
   const res = await fetch(`/api/v1/articles?${params.toString()}`, { cache: "no-store" });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const data: ListResp = await res.json();
-  return data.items ?? [];
+  return {
+    ...data,
+    items: data.items ?? [],
+    total: data.total ?? 0,
+    has_more: Boolean(data.has_more),
+    next_offset: data.next_offset ?? offset + (data.items?.length ?? 0),
+  };
 }
 
 async function fetchAnnouncements(): Promise<Announcement[]> {
@@ -404,7 +415,11 @@ function AnnouncementBar() {
 
 export default function Home() {
   const [articles, setArticles] = useState<Article[]>([]);
+  const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(1);
+  const [hasMore, setHasMore] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [, setTick] = useState(0); // 用于触发 formatRelativeTime 重渲染
@@ -432,6 +447,18 @@ export default function Home() {
     return () => clearTimeout(timer);
   }, [toast]);
 
+  const resetListing = useCallback(() => {
+    initialLoad.current = true;
+    setLoading(true);
+    setLoadingMore(false);
+    setError(null);
+    setArticles([]);
+    setTotal(0);
+    setHasMore(false);
+    setLastUpdated(null);
+    setPage(1);
+  }, []);
+
   const copyShareLink = useCallback(async (id: number) => {
     const url = `${window.location.origin}/share/${id}`;
     try {
@@ -445,14 +472,21 @@ export default function Home() {
 
   // 搜索框防抖
   useEffect(() => {
-    const timer = setTimeout(() => setDebouncedQ(query.trim()), SEARCH_DEBOUNCE_MS);
+    const timer = setTimeout(() => {
+      const next = query.trim();
+      if (next === debouncedQ) return;
+      resetListing();
+      setDebouncedQ(next);
+    }, SEARCH_DEBOUNCE_MS);
     return () => clearTimeout(timer);
-  }, [query]);
+  }, [query, debouncedQ, resetListing]);
 
   const refresh = useCallback(async () => {
     try {
-      const items = await fetchArticles(source, debouncedQ);
-      setArticles(items);
+      const data = await fetchArticles(source, debouncedQ, page * PAGE_SIZE);
+      setArticles(data.items);
+      setTotal(data.total);
+      setHasMore(data.has_more);
       setLastUpdated(new Date());
       setError(null);
     } catch (e) {
@@ -465,8 +499,9 @@ export default function Home() {
         setLoading(false);
         initialLoad.current = false;
       }
+      setLoadingMore(false);
     }
-  }, [source, debouncedQ]);
+  }, [source, debouncedQ, page]);
 
   useEffect(() => {
     refresh();
@@ -523,7 +558,13 @@ export default function Home() {
               {formatRelativeTime(lastUpdated)}更新
             </span>
           )}
-          <span>{loading ? "加载中…" : `共 ${articles.length} 条`}</span>
+          <span>
+            {loading
+              ? "加载中…"
+              : total > articles.length
+                ? `已显示 ${articles.length} / ${total} 条`
+                : `共 ${total} 条`}
+          </span>
         </div>
       </header>
 
@@ -536,7 +577,11 @@ export default function Home() {
               <button
                 key={s.key || "all"}
                 type="button"
-                onClick={() => setSource(s.key)}
+                onClick={() => {
+                  if (source === s.key) return;
+                  resetListing();
+                  setSource(s.key);
+                }}
                 className={
                   "rounded px-3 py-1 text-sm transition " +
                   (active
@@ -765,6 +810,22 @@ export default function Home() {
           );
         })}
       </ul>
+
+      {hasMore && !error && (
+        <div className="mt-6 flex justify-center">
+          <button
+            type="button"
+            onClick={() => {
+              setLoadingMore(true);
+              setPage((prev) => prev + 1);
+            }}
+            disabled={loadingMore || loading}
+            className="rounded-md border border-zinc-300 bg-white px-4 py-2 text-sm text-zinc-700 transition hover:border-zinc-400 hover:text-zinc-900 disabled:cursor-not-allowed disabled:opacity-60 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200 dark:hover:border-zinc-500 dark:hover:text-zinc-100"
+          >
+            {loadingMore ? "加载中…" : `加载更多 (${articles.length}/${total})`}
+          </button>
+        </div>
+      )}
 
       {toast && (
         <div
