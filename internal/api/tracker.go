@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/wwf5067/newsfeed/internal/model"
@@ -69,20 +70,20 @@ type trackerAccumulator struct {
 	SampleArticle *trackerArticleRef
 }
 
-var (
-	// trackerTokenRegex 匹配候选 token:
-	//   1. 中英混合词(如 "iPhone16""AI大模型""ChatGPT概念股"):至少含一个汉字或一个字母,2~16 字符
-	//   2. 纯英文/数字标识(如 "#React""OpenAI"):1~31 字符
-	//   3. 纯中文词:2~12 个汉字(覆盖"国家市场监督管理总局"等长实体)
-	trackerTokenRegex = regexp.MustCompile(
-		`[#A-Za-z0-9][#A-Za-z0-9+._-]{1,31}` + // 纯英文/数字/符号标识
-			`|[\p{Han}A-Za-z0-9][\p{Han}A-Za-z0-9·.]{1,15}` + // 中英混合词(2~16 字符)
-			`|[\p{Han}]{2,12}`, // 纯中文词(2~12 字)
-	)
+type trackerCandidate struct {
+	Label        string
+	Kind         string
+	RelatedTerms []string
+}
 
-	// stopTokens 分层停用词:通用虚词 + 疑问代词 + 平台噪音 + 时间/数量 + 单位
-	stopTokens = map[string]struct{}{
-		// —— 通用虚词/代词 ——
+var (
+	trackerTokenRegex = regexp.MustCompile(
+		`[#A-Za-z0-9][#A-Za-z0-9+._-]{1,31}` +
+			`|[\p{Han}A-Za-z0-9][\p{Han}A-Za-z0-9·.]{1,15}` +
+			`|[\p{Han}]{2,12}`,
+	)
+	trackerTitleSplitRegex = regexp.MustCompile(`[|｜/:：,，。！？!?()（）\[\]【】<>《》"“”‘’·]+`)
+	stopTokens             = map[string]struct{}{
 		"这个": {}, "那个": {}, "一个": {}, "一次": {}, "一些": {}, "一种": {},
 		"我们": {}, "你们": {}, "他们": {}, "大家": {}, "自己": {}, "别人": {},
 		"什么": {}, "哪些": {}, "怎么": {}, "如何": {}, "为什么": {}, "为何": {},
@@ -93,7 +94,6 @@ var (
 		"表示": {}, "认为": {}, "发现": {}, "出现": {}, "进行": {}, "开始": {},
 		"继续": {}, "成为": {}, "属于": {}, "引发": {}, "导致": {}, "造成": {},
 		"相关": {}, "有关": {}, "关于": {}, "对于": {}, "通过": {}, "根据": {},
-		// —— 平台/媒体噪音 ——
 		"知乎": {}, "热榜": {}, "热门": {}, "视频": {}, "话题": {}, "网友": {},
 		"官方": {}, "回应": {}, "发布": {}, "新闻": {}, "记者": {}, "记者称": {},
 		"万热度": {}, "万播放": {}, "播放": {}, "热度": {}, "全文": {}, "全文如下": {},
@@ -101,25 +101,27 @@ var (
 		"评论区": {}, "最新消息": {}, "哔哩哔哩": {}, "bilibili": {}, "B站": {},
 		"关注": {}, "收藏": {}, "转发": {}, "评论": {}, "回答": {}, "问题": {},
 		"曝光": {}, "爆料": {}, "独家": {}, "突发": {}, "重磅": {}, "实锤": {},
-		// —— 时间/数量/程度 ——
 		"今天": {}, "今日": {}, "昨天": {}, "昨日": {}, "明天": {}, "明日": {},
 		"最新": {}, "最近": {}, "最大": {}, "最小": {}, "最高": {}, "最低": {},
 		"非常": {}, "十分": {}, "极其": {}, "特别": {}, "真的": {}, "确实": {},
 		"内容": {}, "方面": {}, "情况": {}, "事情": {}, "东西": {}, "地方": {},
 	}
-
-	// entitySuffixes 实体后缀词:带这些后缀的词大概率是命名实体。
 	entitySuffixes = []string{
 		"公司", "集团", "大学", "医院", "银行", "汽车", "平台", "手机", "芯片", "模型",
 		"赛事", "政府", "委员会", "研究院", "实验室", "科技", "电子", "网络", "基金",
 		"联盟", "协会", "机构", "中心", "工厂", "品牌", "航空", "铁路", "地铁",
 	}
-
-	// entityPrefixes 实体前缀词:以这些开头的词大概率是命名实体(地名/机构)。
 	entityPrefixes = []string{
 		"中国", "美国", "日本", "韩国", "俄罗斯", "北京", "上海", "深圳", "广州",
 		"国家", "中央", "全国",
 	}
+	topicSuffixes = []string{
+		"事件", "计划", "政策", "比赛", "决赛", "演唱会", "电影", "电视剧", "综艺", "事故",
+		"台风", "地震", "暴雨", "洪水", "发布会", "裁员", "融资", "停运", "停播", "罢工",
+		"选举", "高考", "考研", "春晚", "奥运", "世界杯", "季后赛",
+	}
+	trackerTrimPrefixes = []string{"关于", "有关", "对于", "因为", "因", "就", "将", "把", "被", "让", "请问", "如何看待", "为什么", "怎么评价", "怎么看", "最新", "突发", "热议", "围观"}
+	trackerTrimSuffixes = []string{"怎么回事", "是真的吗", "意味着什么", "说了什么", "最新回应", "回应", "发布", "表示", "来了", "出炉", "曝光", "完整版", "完整版视频", "视频", "全文", "详情", "后续"}
 )
 
 func buildTrackerTopics(articles []model.Article, now time.Time, windowHours, limit int) []trackerTopic {
@@ -196,10 +198,7 @@ func buildTrackerTopics(articles []model.Article, now time.Time, windowHours, li
 		return items[i].Label < items[j].Label
 	})
 
-	// 去重合并:如果 topic A 的 label 是 topic B 的子串,且 A 的 Score 不超过 B 的 2 倍,
-	// 则 A 被 B "吸收"——只保留更长/更具体的 B,避免"普京""普京访华"同时出现。
 	items = deduplicateTrackerTopics(items)
-
 	if limit > 0 && len(items) > limit {
 		items = items[:limit]
 	}
@@ -259,48 +258,100 @@ func accumulateTrackerTopics(
 	}
 }
 
-type trackerCandidate struct {
-	Label        string
-	Kind         string
-	RelatedTerms []string
-}
-
 func extractTrackerCandidates(article model.Article) []trackerCandidate {
-	raw := trackerTokenRegex.FindAllString(article.Title+" "+article.Content, -1)
-	if len(raw) == 0 {
+	title := strings.TrimSpace(article.Title)
+	if title == "" {
 		return nil
 	}
 
-	seen := map[string]struct{}{}
-	out := make([]trackerCandidate, 0, len(raw))
-	for _, token := range raw {
-		normalized := normalizeTrackerToken(token)
-		if normalized == "" {
+	ordered := make([]string, 0, 8)
+	poolSeen := map[string]struct{}{}
+	segments := trackerTitleSplitRegex.Split(title, -1)
+	for _, segment := range segments {
+		normalized := normalizeTrackerToken(segment)
+		if normalized != "" {
+			appendTrackerPool(&ordered, poolSeen, normalized)
+		}
+		for _, token := range trackerTokenRegex.FindAllString(segment, -1) {
+			normalized = normalizeTrackerToken(token)
+			if normalized == "" {
+				continue
+			}
+			appendTrackerPool(&ordered, poolSeen, normalized)
+		}
+	}
+	if len(ordered) == 0 {
+		for _, token := range trackerTokenRegex.FindAllString(title, -1) {
+			normalized := normalizeTrackerToken(token)
+			if normalized == "" {
+				continue
+			}
+			appendTrackerPool(&ordered, poolSeen, normalized)
+		}
+	}
+	if len(ordered) == 0 {
+		return nil
+	}
+
+	out := make([]trackerCandidate, 0, 6)
+	for _, label := range ordered {
+		if !shouldKeepTrackerToken(label) {
 			continue
 		}
-		if _, ok := seen[normalized]; ok {
-			continue
-		}
-		seen[normalized] = struct{}{}
 		kind := "keyword"
-		if looksLikeEntity(normalized) {
+		if looksLikeEntity(label) {
 			kind = "entity"
 		}
 		related := []string{}
 		if kind == "entity" {
-			related = collectTrackerRelatedTerms(raw, normalized)
+			related = collectTrackerRelatedTerms(ordered, label)
 		}
-		out = append(out, trackerCandidate{Label: normalized, Kind: kind, RelatedTerms: related})
+		out = append(out, trackerCandidate{Label: label, Kind: kind, RelatedTerms: related})
+		if len(out) >= 6 {
+			break
+		}
 	}
-
 	return out
+}
+
+func appendTrackerPool(pool *[]string, seen map[string]struct{}, label string) {
+	if label == "" {
+		return
+	}
+	if _, ok := seen[label]; ok {
+		return
+	}
+	seen[label] = struct{}{}
+	*pool = append(*pool, label)
 }
 
 func normalizeTrackerToken(token string) string {
 	token = strings.TrimSpace(token)
-	token = strings.Trim(token, "#.,!?:;\uff0c\u3002\uff01\uff1f\uff1a\uff1b\uff08\uff09()[]\u3010\u3011\u300a\u300b\\\"'\u201c\u201d\u2018\u2019\u00b7-")
+	token = strings.Trim(token, "#.,!?:;，。！？：；（）()[]【】《》\"'“”‘’·-")
 	token = strings.TrimPrefix(token, "#")
 	token = strings.TrimSuffix(token, "#")
+	token = compactTrackerSpaces(token)
+	if token == "" {
+		return ""
+	}
+
+	for changed := true; changed; {
+		changed = false
+		for _, prefix := range trackerTrimPrefixes {
+			if strings.HasPrefix(token, prefix) && utf8.RuneCountInString(token) > utf8.RuneCountInString(prefix)+1 {
+				token = strings.TrimSpace(strings.TrimPrefix(token, prefix))
+				changed = true
+			}
+		}
+		for _, suffix := range trackerTrimSuffixes {
+			if strings.HasSuffix(token, suffix) && utf8.RuneCountInString(token) > utf8.RuneCountInString(suffix)+1 {
+				token = strings.TrimSpace(strings.TrimSuffix(token, suffix))
+				changed = true
+			}
+		}
+		token = strings.Trim(token, "#.,!?:;，。！？：；（）()[]【】《》\"'“”‘’·-")
+	}
+
 	if token == "" {
 		return ""
 	}
@@ -308,78 +359,153 @@ func normalizeTrackerToken(token string) string {
 		return ""
 	}
 	runeCount := utf8.RuneCountInString(token)
-	if runeCount < 2 || runeCount > 16 {
+	if runeCount < 2 || runeCount > 20 {
 		return ""
 	}
 	if strings.HasSuffix(token, "热度") || strings.HasSuffix(token, "播放") {
 		return ""
 	}
-	if strings.Contains(token, "http") {
+	if strings.Contains(strings.ToLower(token), "http") {
 		return ""
 	}
-	// 过滤纯数字 token(年份、数量等无意义数字噪音)
 	if isAllDigits(token) {
+		return ""
+	}
+	if !containsHanOrLetter(token) {
+		return ""
+	}
+	if isWeakChineseFragment(token) {
 		return ""
 	}
 	return token
 }
 
-// isAllDigits 判断字符串是否全由 ASCII 数字组成。
 func isAllDigits(s string) bool {
 	if s == "" {
 		return false
 	}
 	for _, r := range s {
-		if r < '0' || r > '9' {
+		if !unicode.IsDigit(r) {
 			return false
 		}
 	}
 	return true
 }
 
-func looksLikeEntity(token string) bool {
-	// 1. 带 # 前缀的话题标签
-	if strings.HasPrefix(token, "#") {
-		return true
+func containsHanOrLetter(s string) bool {
+	for _, r := range s {
+		if unicode.IsLetter(r) || unicode.Is(unicode.Han, r) {
+			return true
+		}
 	}
-	// 2. 含大写字母的英文/混合词(如 "ChatGPT""iPhone""OpenAI")
+	return false
+}
+
+func compactTrackerSpaces(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	prevSpace := false
+	for _, r := range s {
+		if unicode.IsSpace(r) {
+			if !prevSpace {
+				b.WriteByte(' ')
+				prevSpace = true
+			}
+			continue
+		}
+		prevSpace = false
+		b.WriteRune(r)
+	}
+	return strings.TrimSpace(b.String())
+}
+
+func hasUpperASCII(token string) bool {
 	for _, r := range token {
 		if r >= 'A' && r <= 'Z' {
 			return true
 		}
 	}
-	// 3. 带实体后缀的(如 "华为公司""北京大学")
+	return false
+}
+
+func hanRuneCount(token string) int {
+	count := 0
+	for _, r := range token {
+		if unicode.Is(unicode.Han, r) {
+			count++
+		}
+	}
+	return count
+}
+
+func isWeakChineseFragment(token string) bool {
+	if hasUpperASCII(token) || strings.Contains(token, "·") {
+		return false
+	}
+	if looksLikeEntity(token) || looksLikeTopicPhrase(token) {
+		return false
+	}
+	return hanRuneCount(token) <= 3
+}
+
+func looksLikeEntity(token string) bool {
+	if strings.HasPrefix(token, "#") {
+		return true
+	}
+	if hasUpperASCII(token) {
+		return true
+	}
+	if strings.Contains(token, "·") {
+		return true
+	}
 	for _, suffix := range entitySuffixes {
 		if strings.HasSuffix(token, suffix) {
 			return true
 		}
 	}
-	// 4. 带实体前缀的(如 "中国移动""美国总统")
 	for _, prefix := range entityPrefixes {
 		if strings.HasPrefix(token, prefix) && utf8.RuneCountInString(token) > utf8.RuneCountInString(prefix) {
 			return true
 		}
 	}
-	// 5. 较长的中文词(>=4 字)更可能是专有名词而非普通动词/形容词
-	if utf8.RuneCountInString(token) >= 4 {
+	return false
+}
+
+func looksLikeTopicPhrase(token string) bool {
+	if token == "" || looksLikeEntity(token) {
+		return false
+	}
+	for _, suffix := range topicSuffixes {
+		if strings.HasSuffix(token, suffix) {
+			return true
+		}
+	}
+	hanCount := hanRuneCount(token)
+	return hanCount >= 4 && hanCount <= 12
+}
+
+func shouldKeepTrackerToken(token string) bool {
+	if looksLikeEntity(token) {
 		return true
 	}
-	return false
+	return looksLikeTopicPhrase(token)
 }
 
 func collectTrackerRelatedTerms(tokens []string, label string) []string {
 	terms := make([]string, 0, 4)
 	seen := map[string]struct{}{}
 	for _, token := range tokens {
-		normalized := normalizeTrackerToken(token)
-		if normalized == "" || normalized == label {
+		if token == "" || token == label {
 			continue
 		}
-		if _, ok := seen[normalized]; ok {
+		if !shouldKeepTrackerToken(token) {
 			continue
 		}
-		seen[normalized] = struct{}{}
-		terms = append(terms, normalized)
+		if _, ok := seen[token]; ok {
+			continue
+		}
+		seen[token] = struct{}{}
+		terms = append(terms, token)
 		if len(terms) == 4 {
 			break
 		}
@@ -478,6 +604,27 @@ func buildTrackerStoryline(term string, articles []model.Article, windowHours in
 	}
 }
 
+func buildRelatedTrackers(term string, articles []model.Article, limit int) []trackerTopic {
+	filtered := filterArticlesByTerm(term, articles)
+	if len(filtered) == 0 {
+		return nil
+	}
+
+	related := buildTrackerTopics(filtered, time.Now(), 24, limit+1)
+	out := make([]trackerTopic, 0, len(related))
+	needle := strings.ToLower(strings.TrimSpace(term))
+	for _, item := range related {
+		if strings.ToLower(item.Label) == needle {
+			continue
+		}
+		out = append(out, item)
+		if limit > 0 && len(out) >= limit {
+			break
+		}
+	}
+	return out
+}
+
 func filterArticlesByTerm(term string, articles []model.Article) []model.Article {
 	term = strings.TrimSpace(strings.ToLower(term))
 	if term == "" {
@@ -486,26 +633,25 @@ func filterArticlesByTerm(term string, articles []model.Article) []model.Article
 
 	type scored struct {
 		article model.Article
-		weight  int // title 命中权重 3,content 命中权重 1
+		weight  int
 	}
 
-	var matches []scored
+	matches := make([]scored, 0, len(articles))
 	for _, article := range articles {
 		title := strings.ToLower(article.Title)
 		content := strings.ToLower(article.Content)
-		w := 0
+		weight := 0
 		if strings.Contains(title, term) {
-			w += 3
+			weight += 3
 		}
 		if strings.Contains(content, term) {
-			w += 1
+			weight++
 		}
-		if w > 0 {
-			matches = append(matches, scored{article: article, weight: w})
+		if weight > 0 {
+			matches = append(matches, scored{article: article, weight: weight})
 		}
 	}
 
-	// 排序:先按权重降序,再按发布时间降序,最后按热度降序
 	sort.Slice(matches, func(i, j int) bool {
 		if matches[i].weight != matches[j].weight {
 			return matches[i].weight > matches[j].weight
@@ -570,12 +716,6 @@ func maxInt64(a, b int64) int64 {
 	return b
 }
 
-// deduplicateTrackerTopics 去除话题列表中的子串重叠:
-// 如果短 topic A 的 label 是长 topic B 的子串(如"普京"⊂"普京访华"),
-// 且 A.Score <= B.Score*2,则将 A 标记为"被吸收",从结果中移除。
-// 保留更长/更具体的话题,避免列表出现大量重叠条目。
-//
-// 输入已按权重排序,输出保持原序。复杂度 O(n²),n 通常 <50,可接受。
 func deduplicateTrackerTopics(items []trackerTopic) []trackerTopic {
 	if len(items) <= 1 {
 		return items
@@ -592,13 +732,9 @@ func deduplicateTrackerTopics(items []trackerTopic) []trackerTopic {
 			}
 			li := []rune(items[i].Label)
 			lj := []rune(items[j].Label)
-
-			// 只在长度严格不等时做子串判定(等长不互相吸收)
 			if len(li) == len(lj) {
 				continue
 			}
-
-			// 短的可能是长的子串
 			short, long := i, j
 			if len(li) > len(lj) {
 				short, long = j, i
@@ -606,8 +742,6 @@ func deduplicateTrackerTopics(items []trackerTopic) []trackerTopic {
 			if !strings.Contains(items[long].Label, items[short].Label) {
 				continue
 			}
-			// 短的被长的吸收条件:短的 score 不超过长的 2 倍
-			// (如果短的 score 远高于长的,说明短词本身就是独立热点,不应被吸收)
 			if items[short].Score <= items[long].Score*2 {
 				absorbed[short] = true
 			}

@@ -4,6 +4,11 @@ import { Suspense, useEffect, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 
+type Subscription = {
+  id: number;
+  keyword: string;
+};
+
 type TrackerStorylineResp = {
   term: string;
   window: { hours: number };
@@ -19,6 +24,17 @@ type TrackerStorylineResp = {
   momentum: "up" | "flat" | "down";
   score_delta: number;
   total_articles: number;
+};
+
+type RelatedTrackerResp = {
+  term: string;
+  items: {
+    label: string;
+    kind: "entity" | "keyword";
+    score: number;
+    count: number;
+    momentum: "up" | "flat" | "down";
+  }[];
 };
 
 const SOURCE_LABELS: Record<string, string> = {
@@ -56,6 +72,41 @@ async function fetchTrackerStoryline(term: string, windowHours: number): Promise
   };
 }
 
+async function addSubscription(term: string): Promise<void> {
+  const res = await fetch("/api/v1/subscriptions", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ keyword: term }),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+  const data: { created?: boolean } = await res.json();
+  if (data.created === false) {
+    throw new Error("already_subscribed");
+  }
+}
+
+async function listSubscriptions(): Promise<Subscription[]> {
+  const res = await fetch("/api/v1/subscriptions", { cache: "no-store" });
+  if (res.status === 503) return [];
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const data: { items: Subscription[] } = await res.json();
+  return data.items ?? [];
+}
+
+async function deleteSubscription(id: number): Promise<void> {
+  const res = await fetch(`/api/v1/subscriptions/${id}`, { method: "DELETE" });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+}
+
+async function fetchRelatedTrackers(term: string, windowHours: number): Promise<RelatedTrackerResp> {
+  const params = new URLSearchParams({ term, window: String(windowHours) });
+  const res = await fetch(`/api/v1/trackers/related?${params.toString()}`, { cache: "no-store" });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const data: RelatedTrackerResp = await res.json();
+  return { ...data, items: data.items ?? [] };
+}
+
 function TrackerPageContent() {
   const searchParams = useSearchParams();
   const term = (searchParams.get("term") ?? "").trim();
@@ -65,6 +116,10 @@ function TrackerPageContent() {
   const [data, setData] = useState<TrackerStorylineResp | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [subscribeMsg, setSubscribeMsg] = useState<string | null>(null);
+  const [related, setRelated] = useState<RelatedTrackerResp | null>(null);
+  const [subscriptionId, setSubscriptionId] = useState<number | null>(null);
 
   useEffect(() => {
     if (!term) {
@@ -82,6 +137,13 @@ function TrackerPageContent() {
       try {
         const next = await fetchTrackerStoryline(term, windowHours);
         if (!cancelled) setData(next);
+        const relatedData = await fetchRelatedTrackers(term, windowHours);
+        if (!cancelled) setRelated(relatedData);
+        const subscriptions = await listSubscriptions();
+        if (!cancelled) {
+          const existing = subscriptions.find((item) => item.keyword.toLowerCase() === term.toLowerCase());
+          setSubscriptionId(existing?.id ?? null);
+        }
       } catch (e) {
         if (!cancelled) setError(String(e));
       } finally {
@@ -99,6 +161,36 @@ function TrackerPageContent() {
       document.title = `${data.term} - Tracker - Newsfeed`;
     }
   }, [data]);
+
+  async function handleSubscribe() {
+    if (!data?.term || submitting) return;
+    setSubmitting(true);
+    setSubscribeMsg(null);
+    try {
+      if (subscriptionId) {
+        await deleteSubscription(subscriptionId);
+        setSubscriptionId(null);
+        setSubscribeMsg(`已取消订阅「${data.term}」`);
+      } else {
+        await addSubscription(data.term);
+        const subscriptions = await listSubscriptions();
+        const existing = subscriptions.find((item) => item.keyword.toLowerCase() === data.term.toLowerCase());
+        setSubscriptionId(existing?.id ?? null);
+        setSubscribeMsg(`已订阅「${data.term}」`);
+      }
+    } catch (e) {
+      if (String(e).includes("already_subscribed")) {
+        const subscriptions = await listSubscriptions();
+        const existing = subscriptions.find((item) => item.keyword.toLowerCase() === data.term.toLowerCase());
+        setSubscriptionId(existing?.id ?? null);
+        setSubscribeMsg(`「${data.term}」已经在订阅列表里`);
+      } else {
+        setSubscribeMsg(`订阅失败: ${String(e)}`);
+      }
+    } finally {
+      setSubmitting(false);
+    }
+  }
 
   if (loading) {
     return (
@@ -161,8 +253,22 @@ function TrackerPageContent() {
             >
               查看全部相关文章
             </Link>
+            <button
+              type="button"
+              onClick={handleSubscribe}
+              disabled={submitting}
+              className="rounded-full bg-zinc-900 px-3 py-1 text-white transition hover:bg-zinc-700 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
+            >
+              {submitting ? "处理中…" : subscriptionId ? `取消订阅「${data.term}」` : `订阅「${data.term}」`}
+            </button>
           </div>
         </div>
+
+        {subscribeMsg && (
+          <div className="mb-4 rounded-md border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm text-zinc-600 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-300">
+            {subscribeMsg}
+          </div>
+        )}
 
         <div className="mb-6 space-y-2 text-sm leading-relaxed text-zinc-700 dark:text-zinc-300">
           {data.summary.map((line) => (
@@ -198,6 +304,23 @@ function TrackerPageContent() {
             </Link>
           ))}
         </div>
+
+        {related && related.items.length > 0 && (
+          <div className="mt-8 border-t border-zinc-200 pt-6 dark:border-zinc-800">
+            <h2 className="mb-3 text-sm font-semibold text-zinc-900 dark:text-zinc-100">关联话题</h2>
+            <div className="flex flex-wrap gap-2">
+              {related.items.map((item) => (
+                <Link
+                  key={`${item.kind}:${item.label}`}
+                  href={`/tracker?term=${encodeURIComponent(item.label)}&window=${data.window.hours}`}
+                  className="rounded-full bg-zinc-100 px-3 py-1 text-xs text-zinc-700 transition hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
+                >
+                  {item.label} · {item.count} 条
+                </Link>
+              ))}
+            </div>
+          </div>
+        )}
       </section>
     </main>
   );

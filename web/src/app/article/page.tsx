@@ -46,6 +46,16 @@ function formatTime(iso: string): string {
   }
 }
 
+async function addSubscription(term: string): Promise<{ created?: boolean }> {
+  const res = await fetch("/api/v1/subscriptions", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ keyword: term }),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+
 // Sparkline 用纯 SVG 画热度时序。30 行代码,不引图表库。
 // width/height 固定,viewBox 让线条按数据范围自适应。
 function Sparkline({ points }: { points: HeatPoint[] }) {
@@ -109,6 +119,8 @@ function ArticleContent() {
   const [history, setHistory] = useState<HeatPoint[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [subscribeMsg, setSubscribeMsg] = useState<string | null>(null);
 
   useEffect(() => {
     if (!id) {
@@ -200,6 +212,24 @@ function ArticleContent() {
 
   const sourceLabel = SOURCE_LABELS[article.source_key] ?? article.source_key;
 
+  async function handleSubscribeTitle() {
+    if (submitting) return;
+    setSubmitting(true);
+    setSubscribeMsg(null);
+    try {
+      const result = await addSubscription(article.title);
+      if (result.created === false) {
+        setSubscribeMsg("该标题已经在订阅列表里");
+      } else {
+        setSubscribeMsg("已按当前标题加入订阅");
+      }
+    } catch (e) {
+      setSubscribeMsg(`订阅失败: ${String(e)}`);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
   return (
     <main className="mx-auto w-full max-w-3xl px-4 py-8">
       <Link
@@ -224,6 +254,29 @@ function ArticleContent() {
           )}
           <span>· {formatTime(article.published_at)}</span>
         </div>
+
+        <div className="mb-6 flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={handleSubscribeTitle}
+            disabled={submitting}
+            className="rounded-full bg-zinc-900 px-3 py-1 text-xs text-white transition hover:bg-zinc-700 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
+          >
+            {submitting ? "订阅中…" : "订阅这个标题"}
+          </button>
+          <Link
+            href={`/tracker?term=${encodeURIComponent(article.title)}&window=24`}
+            className="rounded-full bg-amber-100 px-3 py-1 text-xs text-amber-700 transition hover:bg-amber-200 dark:bg-amber-950 dark:text-amber-300 dark:hover:bg-amber-900"
+          >
+            查看标题时间线
+          </Link>
+        </div>
+
+        {subscribeMsg && (
+          <div className="mb-6 rounded-md border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm text-zinc-600 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-300">
+            {subscribeMsg}
+          </div>
+        )}
 
         {article.content && (
           <p className="mb-6 whitespace-pre-wrap text-base leading-relaxed text-zinc-700 dark:text-zinc-300">

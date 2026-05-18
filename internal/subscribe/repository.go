@@ -67,11 +67,11 @@ func (r *Repository) List(ctx context.Context) ([]Subscription, error) {
 //
 // 实现:Postgres 的 ON CONFLICT 不直接支持 expression index,必须先查再插。
 // 用一个事务保证"查 + 插"原子,避免并发下双写(虽然单实例 crawler 不太会发生)。
-func (r *Repository) Add(ctx context.Context, keyword string) (*Subscription, error) {
+func (r *Repository) Add(ctx context.Context, keyword string) (*Subscription, bool, error) {
 	keyword = strings.TrimSpace(keyword)
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	defer tx.Rollback(ctx)
 
@@ -83,7 +83,7 @@ func (r *Repository) Add(ctx context.Context, keyword string) (*Subscription, er
 	).Scan(&s.ID, &s.Keyword, &s.CreatedAt)
 	if err == nil {
 		// 已存在,直接返回
-		return &s, tx.Commit(ctx)
+		return &s, false, tx.Commit(ctx)
 	}
 	// 没找到 → 插入
 	if err := tx.QueryRow(ctx,
@@ -91,9 +91,9 @@ func (r *Repository) Add(ctx context.Context, keyword string) (*Subscription, er
          RETURNING id, keyword, created_at`,
 		keyword,
 	).Scan(&s.ID, &s.Keyword, &s.CreatedAt); err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	return &s, tx.Commit(ctx)
+	return &s, true, tx.Commit(ctx)
 }
 
 // Delete 按 id 删订阅;关联的 keyword_notifications 由 ON DELETE CASCADE 自动清理。
