@@ -76,6 +76,18 @@ type trackerCandidate struct {
 	RelatedTerms []string
 }
 
+type trackerLexiconEntry struct {
+	Label   string
+	Aliases []string
+}
+
+type trackerLexiconAlias struct {
+	Label            string
+	Needle           string
+	Lower            string
+	RequiresBoundary bool
+}
+
 var (
 	trackerTokenRegex = regexp.MustCompile(
 		`[#A-Za-z0-9][#A-Za-z0-9+._-]{1,31}` +
@@ -266,6 +278,7 @@ func extractTrackerCandidates(article model.Article) []trackerCandidate {
 
 	ordered := make([]string, 0, 8)
 	poolSeen := map[string]struct{}{}
+	collectTrackerLexiconMatches(title, &ordered, poolSeen)
 	segments := trackerTitleSplitRegex.Split(title, -1)
 	for _, segment := range segments {
 		normalized := normalizeTrackerToken(segment)
@@ -323,6 +336,166 @@ func appendTrackerPool(pool *[]string, seen map[string]struct{}, label string) {
 	}
 	seen[label] = struct{}{}
 	*pool = append(*pool, label)
+}
+
+func buildTrackerEntityAliasIndex(entries []trackerLexiconEntry) []trackerLexiconAlias {
+	out := make([]trackerLexiconAlias, 0, len(entries)*3)
+	seen := map[string]struct{}{}
+	for _, entry := range entries {
+		label := normalizeTrackerToken(entry.Label)
+		if label == "" {
+			continue
+		}
+		aliases := append([]string{label}, entry.Aliases...)
+		for _, alias := range aliases {
+			needle := normalizeTrackerToken(alias)
+			if needle == "" {
+				continue
+			}
+			if strings.ContainsAny(needle, " -") {
+				for _, part := range splitTrackerAliasParts(needle) {
+					partKey := label + "\x00" + strings.ToLower(part)
+					if _, ok := seen[partKey]; ok {
+						continue
+					}
+					seen[partKey] = struct{}{}
+					out = append(out, trackerLexiconAlias{
+						Label:            label,
+						Needle:           part,
+						Lower:            strings.ToLower(part),
+						RequiresBoundary: trackerAliasRequiresBoundary(part),
+					})
+				}
+			}
+			if len(needle) >= 6 && strings.ContainsRune(needle, ' ') {
+				compact := strings.ReplaceAll(needle, " ", "")
+				compactKey := label + "\x00" + strings.ToLower(compact)
+				if compact != "" {
+					if _, ok := seen[compactKey]; !ok {
+						seen[compactKey] = struct{}{}
+						out = append(out, trackerLexiconAlias{
+							Label:            label,
+							Needle:           compact,
+							Lower:            strings.ToLower(compact),
+							RequiresBoundary: trackerAliasRequiresBoundary(compact),
+						})
+					}
+				}
+			}
+			key := label + "\x00" + strings.ToLower(needle)
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			out = append(out, trackerLexiconAlias{
+				Label:            label,
+				Needle:           needle,
+				Lower:            strings.ToLower(needle),
+				RequiresBoundary: trackerAliasRequiresBoundary(needle),
+			})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if utf8.RuneCountInString(out[i].Needle) != utf8.RuneCountInString(out[j].Needle) {
+			return utf8.RuneCountInString(out[i].Needle) > utf8.RuneCountInString(out[j].Needle)
+		}
+		if out[i].Label != out[j].Label {
+			return out[i].Label < out[j].Label
+		}
+		return out[i].Needle < out[j].Needle
+	})
+	return out
+}
+
+func collectTrackerLexiconMatches(title string, pool *[]string, seen map[string]struct{}) {
+	lowerTitle := strings.ToLower(title)
+	for _, alias := range trackerEntityAliasIndex {
+		if alias.Lower == "" {
+			continue
+		}
+		if alias.RequiresBoundary {
+			if !containsTrackerAliasWithBoundary(lowerTitle, alias.Lower) {
+				continue
+			}
+		} else if !strings.Contains(lowerTitle, alias.Lower) {
+			continue
+		}
+		appendTrackerPool(pool, seen, alias.Label)
+	}
+}
+
+func splitTrackerAliasParts(alias string) []string {
+	parts := strings.FieldsFunc(alias, func(r rune) bool {
+		return r == ' ' || r == '-'
+	})
+	out := make([]string, 0, len(parts))
+	seen := map[string]struct{}{}
+	for _, part := range parts {
+		part = normalizeTrackerToken(part)
+		if part == "" || utf8.RuneCountInString(part) < 2 {
+			continue
+		}
+		if trackerAliasRequiresBoundary(part) && utf8.RuneCountInString(part) < 5 {
+			continue
+		}
+		if _, ok := seen[part]; ok {
+			continue
+		}
+		seen[part] = struct{}{}
+		out = append(out, part)
+	}
+	return out
+}
+
+func trackerAliasRequiresBoundary(alias string) bool {
+	for _, r := range alias {
+		if r > unicode.MaxASCII {
+			return false
+		}
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			return true
+		}
+	}
+	return false
+}
+
+func containsTrackerAliasWithBoundary(text, alias string) bool {
+	if alias == "" {
+		return false
+	}
+	for start := 0; start < len(text); {
+		idx := strings.Index(text[start:], alias)
+		if idx < 0 {
+			return false
+		}
+		idx += start
+		end := idx + len(alias)
+		if hasTrackerAliasBoundary(text, idx, end) {
+			return true
+		}
+		start = idx + len(alias)
+	}
+	return false
+}
+
+func hasTrackerAliasBoundary(text string, start, end int) bool {
+	if start > 0 {
+		prev, _ := utf8.DecodeLastRuneInString(text[:start])
+		if isTrackerASCIIWordRune(prev) {
+			return false
+		}
+	}
+	if end < len(text) {
+		next, _ := utf8.DecodeRuneInString(text[end:])
+		if isTrackerASCIIWordRune(next) {
+			return false
+		}
+	}
+	return true
+}
+
+func isTrackerASCIIWordRune(r rune) bool {
+	return (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9')
 }
 
 func normalizeTrackerToken(token string) string {
@@ -449,6 +622,9 @@ func isWeakChineseFragment(token string) bool {
 }
 
 func looksLikeEntity(token string) bool {
+	if _, ok := trackerEntityLabelSet[token]; ok {
+		return true
+	}
 	if strings.HasPrefix(token, "#") {
 		return true
 	}
