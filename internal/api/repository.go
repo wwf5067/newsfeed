@@ -101,6 +101,99 @@ type HeatPoint struct {
 	CapturedAt time.Time `json:"captured_at"`
 }
 
+// SurgingArticle 飙升榜返回的复合结构:Article + 窗口期内的增量信息。
+// SurgeDelta = 当前 heat_value - 窗口起点 heat_value;前端用它做"↑ XX 万 / 6h"展示。
+// WindowStartHeat 给前端做参考用(可选展示),也方便排查。
+type SurgingArticle struct {
+	model.Article
+	SurgeDelta      int64 `json:"surge_delta"`
+	WindowStartHeat int64 `json:"window_start_heat"`
+}
+
+// ListSurging 返回时间窗口内热度增长最大的文章,按源过滤、按增量降序。
+//
+// 思路:对每条 article 取它在窗口起点(NOW - windowHours)及之前最近的一条 snapshot
+// 作为基准热度,用当前 articles.heat_value 减去基准得到增量。没有窗口起点之前的
+// snapshot(即首次抓取在窗口内)的条目排除——它们没有可比基准,放进飙升榜会扭曲排序。
+//
+// minHeat 用于过滤量级太小的"伪飙升"(如 0→500,百分比看着炸但实际是噪声)。
+func (r *Repository) ListSurging(
+	ctx context.Context,
+	sourceKey string,
+	limit, windowHours, minHeat int,
+) ([]SurgingArticle, error) {
+	// 限定窗口取值范围,防止外部传 windowHours=99999 拖慢扫描
+	if windowHours <= 0 || windowHours > 168 {
+		windowHours = 6
+	}
+	if limit <= 0 || limit > 100 {
+		limit = 20
+	}
+	if minHeat < 0 {
+		minHeat = 0
+	}
+
+	var (
+		conds = []string{"a.heat_value >= $1"}
+		args  = []any{minHeat}
+	)
+	args = append(args, windowHours)
+	windowIdx := len(args) // $2
+
+	if sourceKey != "" {
+		args = append(args, sourceKey)
+		conds = append(conds, fmt.Sprintf("a.source_key = $%d", len(args)))
+	}
+	args = append(args, limit)
+	limitIdx := len(args)
+
+	// LATERAL 子查询拿每条 article 在窗口起点之前最近的一条 snapshot 作为基准。
+	// 没有这种 snapshot 的(首次抓取就在窗口内)被 INNER JOIN 过滤掉。
+	// make_interval(hours => $N) 比 ($N || ' hours')::interval 安全:后者要求
+	// 两侧都是 text,pgx 默认把 Go int 传成 integer,会触发类型不匹配。
+	q := fmt.Sprintf(`
+SELECT a.id, a.source_key, a.url, a.title, a.content, a.author,
+       a.heat, a.heat_value, a.prev_heat, a.prev_heat_value,
+       a.published_at, a.fetched_at,
+       s.heat_value AS window_start_heat,
+       (a.heat_value - s.heat_value) AS surge_delta
+FROM articles a
+JOIN LATERAL (
+    SELECT heat_value
+    FROM article_heat_snapshots
+    WHERE article_id = a.id
+      AND captured_at <= NOW() - make_interval(hours => $%d)
+    ORDER BY captured_at DESC
+    LIMIT 1
+) s ON TRUE
+WHERE %s
+  AND a.heat_value > s.heat_value
+ORDER BY surge_delta DESC
+LIMIT $%d
+`, windowIdx, strings.Join(conds, " AND "), limitIdx)
+
+	rows, err := r.pool.Query(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []SurgingArticle
+	for rows.Next() {
+		var s SurgingArticle
+		if err := rows.Scan(
+			&s.ID, &s.SourceKey, &s.URL, &s.Title, &s.Content,
+			&s.Author, &s.Heat, &s.HeatValue, &s.PrevHeat, &s.PrevHeatValue,
+			&s.PublishedAt, &s.FetchedAt,
+			&s.WindowStartHeat, &s.SurgeDelta,
+		); err != nil {
+			return nil, err
+		}
+		out = append(out, s)
+	}
+	return out, rows.Err()
+}
+
 // GetHeatHistory 拉某条文章最近 limit 条 heat snapshot,按时间正序返回(便于前端直接画线)。
 // limit 应由调用方限制在合理范围(如 48 = 24h × 30min)。
 func (r *Repository) GetHeatHistory(ctx context.Context, articleID int64, limit int) ([]HeatPoint, error) {

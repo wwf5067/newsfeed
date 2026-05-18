@@ -130,6 +130,52 @@ func (h *Handler) ListAnnouncements(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"items": items})
 }
 
+// allowedSurgeWindows 限制窗口枚举,防止任意值导致非预期的 SQL 扫描区间。
+var allowedSurgeWindows = map[int]bool{1: true, 6: true, 24: true}
+
+// ListSurging 返回飙升榜:窗口期内热度增量最大的文章。
+// 参数:
+//
+//	source     可选,按 source_key 过滤(空=全部)
+//	limit      默认 20,最大 50
+//	window     窗口小时数,允许 1/6/24,默认 6
+//	min_heat   最小热度门槛,默认 5000(过滤量级噪声)
+func (h *Handler) ListSurging(w http.ResponseWriter, r *http.Request) {
+	limit := parseIntDefault(r.URL.Query().Get("limit"), 20)
+	if limit <= 0 || limit > 50 {
+		limit = 20
+	}
+	window := parseIntDefault(r.URL.Query().Get("window"), 6)
+	if !allowedSurgeWindows[window] {
+		window = 6
+	}
+	minHeat := parseIntDefault(r.URL.Query().Get("min_heat"), 5000)
+	if minHeat < 0 {
+		minHeat = 0
+	}
+	source := strings.TrimSpace(r.URL.Query().Get("source"))
+	if len(source) > 64 {
+		source = ""
+	}
+
+	items, err := h.repo.ListSurging(r.Context(), source, limit, window, minHeat)
+	if err != nil {
+		h.logger.Error("list surging", "err", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
+		return
+	}
+	if items == nil {
+		items = []SurgingArticle{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"items":    items,
+		"limit":    limit,
+		"window":   window,
+		"min_heat": minHeat,
+		"source":   source,
+	})
+}
+
 func writeJSON(w http.ResponseWriter, status int, body any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
