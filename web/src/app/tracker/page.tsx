@@ -207,9 +207,6 @@ function TrackerPageContent() {
   const [related, setRelated] = useState<RelatedTrackerResp | null>(null);
   const [subscriptionId, setSubscriptionId] = useState<number | null>(null);
 
-  // 把 items 按时间分组(今天/昨天/本周/更早),组内按热度倒序
-  const timeGroups = useMemo(() => groupByTime(data?.items ?? []), [data]);
-
   useEffect(() => {
     if (!term) {
       setError("missing_term");
