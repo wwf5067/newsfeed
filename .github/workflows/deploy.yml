@@ -169,11 +169,21 @@ jobs:
           tar -xzf /tmp/newsfeed-bundle.tar.gz -C "$APP_DIR"
           rm -f /tmp/newsfeed-bundle.tar.gz
 
-          # 解包前端
-          rm -rf "$APP_DIR/web-dist"
-          mkdir -p "$APP_DIR/web-dist"
-          tar -xzf "$APP_DIR/web-dist.tar.gz" -C "$APP_DIR/web-dist"
+          # ---- 前端原子更新 ----
+          # 历史:之前 rm -rf web-dist + mkdir + tar 解包,会让 nginx 容器
+          # 持有的 bind mount inode 失效(幽灵挂载,看到空目录),整个部署
+          # 期间 / 返回 500,直到 restart nginx 才修。
+          #
+          # 现方案:先解包到 web-dist-staging/(全新目录),然后用 rsync
+          # 把内容同步到 web-dist/(--delete 删除旧文件)。rsync 是逐文件
+          # 原子 rename 写入,目录 inode 始终不变,nginx 容器不需要重启,
+          # 单文件级别看到的要么旧版要么新版,500 窗口降到 ~0。
+          mkdir -p "$APP_DIR/web-dist" "$APP_DIR/web-dist-staging"
+          rm -rf "$APP_DIR/web-dist-staging"/*
+          tar -xzf "$APP_DIR/web-dist.tar.gz" -C "$APP_DIR/web-dist-staging"
           rm -f "$APP_DIR/web-dist.tar.gz"
+          rsync -a --delete "$APP_DIR/web-dist-staging/" "$APP_DIR/web-dist/"
+          rm -rf "$APP_DIR/web-dist-staging"
 
           cd "$APP_DIR"
 
@@ -192,9 +202,8 @@ jobs:
           # 迁移(失败则整体退出,避免 "表不存在" 这种隐性问题)
           docker compose -f docker-compose.prod.yml --progress plain --profile migrate run --rm migrate
           docker compose -f docker-compose.prod.yml --progress plain up -d
-          # web-dist 目录被上面 rm -rf 重建过,inode 变了。镜像没变时 `up -d`
-          # 不会重启 nginx,旧容器仍持有失效挂载(幽灵挂载),需手动 restart。
-          docker compose -f docker-compose.prod.yml --progress plain restart nginx
+          # 不再 restart nginx —— 前端走 rsync 原地更新,inode 始终不变,
+          # nginx 自动看到新文件。docker-compose 配置变更才需要 restart。
           docker compose -f docker-compose.prod.yml ps
 
           # ---- 远端自检:确认容器真的换上了新镜像 + 服务能响应 ----
