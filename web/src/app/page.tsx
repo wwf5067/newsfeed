@@ -332,6 +332,55 @@ function ArticleRow({ article, index }: { article: Article; index: number }) {
   );
 }
 
+// ======================== Subscriptions Hook ========================
+
+type Subscription = { id: number; keyword: string; created_at: string };
+
+function useSubscriptions() {
+  const [items, setItems] = useState<Subscription[]>([]);
+  const [notifyTo, setNotifyTo] = useState<string>("");
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const refresh = useCallback(async () => {
+    try {
+      const res = await fetch("/api/v1/subscriptions", { cache: "no-store" });
+      if (res.status === 503) { setError("订阅功能未启用"); setLoading(false); return; }
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data: { items: Subscription[]; notify_to: string } = await res.json();
+      setItems(data.items ?? []);
+      setNotifyTo(data.notify_to ?? "");
+      setError(null);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { refresh(); }, [refresh]);
+
+  const add = useCallback(async (raw: string) => {
+    const v = raw.trim();
+    if (!v) return;
+    try {
+      const res = await fetch("/api/v1/subscriptions", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ keyword: v }) });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      await refresh();
+    } catch (e) { setError(String(e)); }
+  }, [refresh]);
+
+  const remove = useCallback(async (id: number) => {
+    try {
+      const res = await fetch(`/api/v1/subscriptions/${id}`, { method: "DELETE" });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      await refresh();
+    } catch (e) { setError(String(e)); }
+  }, [refresh]);
+
+  return { items, notifyTo, loading, error, add, remove };
+}
+
 // ======================== Main Page ========================
 
 export default function Home() {
@@ -354,6 +403,11 @@ export default function Home() {
 
   // "全部"Tab + 非搜索 = 话题聚合视图; "知乎"/"B站"Tab 或搜索 = 时间流
   const isTopicView = source === "" && !debouncedQ;
+
+  // 邮件订阅
+  const subs = useSubscriptions();
+  const [keywordInput, setKeywordInput] = useState("");
+  const [subOpen, setSubOpen] = useState(false);
 
   // 搜索防抖
   useEffect(() => {
@@ -505,6 +559,45 @@ export default function Home() {
                 {w}h
               </button>
             ))}
+          </div>
+        )}
+      </div>
+
+      {/* 邮件订阅(折叠) */}
+      <div className="mb-4 text-sm">
+        <button type="button" onClick={() => setSubOpen((v) => !v)} className="text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100">
+          📧 邮件订阅
+          {subs.items.length > 0 && <span className="ml-1 text-xs text-zinc-400">({subs.items.length})</span>}
+          <span className="ml-1 text-xs">{subOpen ? "▴" : "▾"}</span>
+        </button>
+        {subOpen && (
+          <div className="mt-2 rounded-md border border-zinc-200 bg-zinc-50 p-3 dark:border-zinc-800 dark:bg-zinc-900">
+            {subs.error && (
+              <div className="mb-2 rounded bg-red-50 px-2 py-1 text-xs text-red-700 dark:bg-red-950 dark:text-red-300">{subs.error}</div>
+            )}
+            <div className="mb-2 flex flex-wrap gap-2">
+              {subs.loading ? (
+                <span className="text-xs text-zinc-500">加载中…</span>
+              ) : subs.items.length === 0 ? (
+                <span className="text-xs text-zinc-500">还没有订阅关键词</span>
+              ) : (
+                subs.items.map((s) => (
+                  <span key={s.id} className="inline-flex items-center gap-1 rounded-full bg-zinc-200 px-2 py-0.5 text-xs text-zinc-700 dark:bg-zinc-700 dark:text-zinc-200">
+                    {s.keyword}
+                    <button type="button" onClick={() => subs.remove(s.id)} aria-label={`移除 ${s.keyword}`} className="text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100">×</button>
+                  </span>
+                ))
+              )}
+            </div>
+            <form onSubmit={(e) => { e.preventDefault(); if (!keywordInput.trim()) return; subs.add(keywordInput); setKeywordInput(""); }} className="flex gap-2">
+              <input type="text" value={keywordInput} onChange={(e) => setKeywordInput(e.target.value)} placeholder="输入关键词后回车，如 AI / 裁员" className="min-w-0 flex-1 rounded-md border border-zinc-300 bg-white px-2 py-1 text-xs outline-none focus:border-zinc-500 dark:border-zinc-700 dark:bg-zinc-800" />
+              <button type="submit" className="rounded-md bg-zinc-900 px-3 py-1 text-xs text-white hover:bg-zinc-700 dark:bg-zinc-100 dark:text-zinc-900">添加</button>
+            </form>
+            <div className="mt-3 text-xs text-zinc-500">
+              {subs.notifyTo
+                ? <>命中后会发邮件到 <span className="font-mono">{subs.notifyTo}</span>，延迟约等于抓取间隔(30分钟内)</>
+                : "未配置收件邮箱。后端命中仍会登记去重，配上之后从下次开始发送。"}
+            </div>
           </div>
         )}
       </div>
