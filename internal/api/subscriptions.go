@@ -10,7 +10,8 @@ import (
 )
 
 // 关键词长度上限,防止恶意超长字符串。
-const maxKeywordLen = 64
+// 放宽到 200:详情页支持"订阅这个标题",中文标题通常 20-60 字(UTF-8 编码后 60-180 字节)。
+const maxKeywordLen = 200
 
 // ListSubscriptions GET /api/v1/subscriptions
 // 返回当前所有订阅 + notify_to 模糊提示("xxx***@yyy.com")。

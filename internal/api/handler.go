@@ -176,7 +176,7 @@ func (h *Handler) GetTrackerStoryline(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "term required"})
 		return
 	}
-	if len([]rune(term)) > 32 {
+	if len([]rune(term)) > 100 {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "term too long"})
 		return
 	}
@@ -202,7 +202,7 @@ func (h *Handler) ListTrackerRelated(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "term required"})
 		return
 	}
-	if len([]rune(term)) > 32 {
+	if len([]rune(term)) > 100 {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "term too long"})
 		return
 	}
