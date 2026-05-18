@@ -352,38 +352,27 @@ function TopicGroup({
 
 function ArticleRow({ article, index }: { article: Article; index: number }) {
   const isNew = article.prev_heat_value === 0 && article.heat_value > 0;
-  const hasTrend = !isNew && article.prev_heat_value > 0 && article.heat_value > 0 && article.heat_value !== article.prev_heat_value;
-  const diff = article.heat_value - article.prev_heat_value;
-  const up = diff > 0;
 
   return (
     <Link
       href={`/article?id=${article.id}`}
-      className="flex items-center gap-3 border-b border-zinc-50 px-3 py-2.5 transition last:border-b-0 hover:bg-zinc-50 dark:border-zinc-800/50 dark:hover:bg-zinc-800/50"
+      className="flex items-start gap-3 border-b border-zinc-50 px-3 py-2.5 transition last:border-b-0 hover:bg-zinc-50 dark:border-zinc-800/50 dark:hover:bg-zinc-800/50"
     >
-      <span className="shrink-0 font-mono text-[11px] text-zinc-300 tabular-nums dark:text-zinc-600">
+      <span className="mt-0.5 shrink-0 font-mono text-[11px] text-zinc-300 tabular-nums dark:text-zinc-600">
         {String(index + 1).padStart(2, "0")}
       </span>
-      <span className="min-w-0 flex-1 truncate text-sm text-zinc-800 dark:text-zinc-200">
+      <span className="min-w-0 flex-1 line-clamp-2 text-sm leading-snug text-zinc-800 dark:text-zinc-200">
         {article.title}
       </span>
       {isNew && (
-        <span className="shrink-0 rounded-full bg-red-600 px-1.5 py-0.5 text-[9px] font-bold leading-none text-white">NEW</span>
+        <span className="mt-0.5 shrink-0 rounded-full bg-red-600 px-1.5 py-0.5 text-[9px] font-bold leading-none text-white">NEW</span>
       )}
-      <span className="shrink-0 text-[11px] text-zinc-400">
-        {SOURCE_LABELS[article.source_key] ?? article.source_key}
-      </span>
-      <span className="shrink-0 text-[11px] text-zinc-400">
+      <span className="mt-0.5 shrink-0 text-[11px] text-zinc-400">
         {formatRelativeTime(article.published_at)}
       </span>
       {(article.heat || article.heat_value > 0) && (
-        <span className="shrink-0 text-[11px] font-medium tabular-nums text-red-500 dark:text-red-400">
+        <span className="mt-0.5 shrink-0 text-[11px] font-medium tabular-nums text-red-500 dark:text-red-400">
           {article.heat || formatHeat(article.heat_value)}
-          {hasTrend && (
-            <span className={up ? " text-emerald-500" : " text-zinc-400"}>
-              {" "}{up ? "↑" : "↓"}{formatHeat(Math.abs(diff))}
-            </span>
-          )}
         </span>
       )}
     </Link>
