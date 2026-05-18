@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback, useRef } from "react";
+import { useEffect, useState, useCallback, useRef, useMemo } from "react";
 import Link from "next/link";
 
 type Article = {
@@ -16,9 +16,6 @@ type Article = {
   prev_heat_value: number;
   published_at: string;
   fetched_at: string;
-  // 仅飙升榜接口返回。最新榜接口不带,这里设为可选避免到处加 if。
-  surge_delta?: number;
-  window_start_heat?: number;
 };
 
 type ListResp = {
@@ -64,20 +61,6 @@ async function fetchArticles(source: string, q: string): Promise<Article[]> {
   if (source) params.set("source", source);
   if (q) params.set("q", q);
   const res = await fetch(`/api/v1/articles?${params.toString()}`, { cache: "no-store" });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  const data: ListResp = await res.json();
-  return data.items ?? [];
-}
-
-// 飙升榜:窗口期内热度增长最大的若干条。后端按 surge_delta 倒序。
-// window 必须是后端白名单里的小时数(1/6/24),否则后端会回退默认值。
-async function fetchSurging(source: string, windowHours: number): Promise<Article[]> {
-  const params = new URLSearchParams({
-    limit: "30",
-    window: String(windowHours),
-  });
-  if (source) params.set("source", source);
-  const res = await fetch(`/api/v1/articles/surging?${params.toString()}`, { cache: "no-store" });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const data: ListResp = await res.json();
   return data.items ?? [];
@@ -432,11 +415,6 @@ export default function Home() {
   const [query, setQuery] = useState("");
   const [debouncedQ, setDebouncedQ] = useState("");
 
-  // 列表模式:latest = /articles 按时间倒序,surging = /articles/surging 按窗口增量倒序。
-  // 飙升模式不参与搜索(语义不清),切到 surging 时清空搜索框。
-  const [mode, setMode] = useState<"latest" | "surging">("latest");
-  const [surgeWindow, setSurgeWindow] = useState<1 | 6 | 24>(6);
-
   // 已读 / 收藏 id(localStorage 持久化)
   const read = useIdSet(READ_KEY);
   const starred = useIdSet(STARRED_KEY);
@@ -473,10 +451,7 @@ export default function Home() {
 
   const refresh = useCallback(async () => {
     try {
-      const items =
-        mode === "surging"
-          ? await fetchSurging(source, surgeWindow)
-          : await fetchArticles(source, debouncedQ);
+      const items = await fetchArticles(source, debouncedQ);
       setArticles(items);
       setLastUpdated(new Date());
       setError(null);
@@ -491,7 +466,7 @@ export default function Home() {
         initialLoad.current = false;
       }
     }
-  }, [mode, source, debouncedQ, surgeWindow]);
+  }, [source, debouncedQ]);
 
   useEffect(() => {
     refresh();
@@ -504,6 +479,34 @@ export default function Home() {
     const timer = setInterval(() => setTick((t) => t + 1), 30_000);
     return () => clearInterval(timer);
   }, []);
+
+  // 同源 Top 10 id 集合:每个 source_key 内部按 heat_value 降序前 10 名。
+  // 用 Set<id> 让卡片渲染时 O(1) 判断。每次 articles 变才重算。
+  const topIdsBySource = useMemo(() => {
+    const bySource = new Map<string, Article[]>();
+    for (const a of articles) {
+      const list = bySource.get(a.source_key) ?? [];
+      list.push(a);
+      bySource.set(a.source_key, list);
+    }
+    const top = new Set<number>();
+    for (const list of bySource.values()) {
+      list
+        .filter((a) => a.heat_value > 0)
+        .sort((x, y) => y.heat_value - x.heat_value)
+        .slice(0, 10)
+        .forEach((a) => top.add(a.id));
+    }
+    return top;
+  }, [articles]);
+
+  // 飙升判定:相比上一次抓取(30 分钟前) heat 增幅 >= 30% 即认为飙升。
+  // 严格意义上是 30min 增幅,但抓取频率就是 30min,语义贴近"短时上扬"。
+  // 首次上榜(prev_heat_value === 0)走 NEW 徽章,不算飙升。
+  function isSurging(a: Article): boolean {
+    if (a.prev_heat_value <= 0 || a.heat_value <= 0) return false;
+    return (a.heat_value - a.prev_heat_value) / a.prev_heat_value >= 0.3;
+  }
 
   return (
     <main className="mx-auto w-full max-w-3xl px-4 py-8">
@@ -520,33 +523,8 @@ export default function Home() {
         </div>
       </header>
 
-      {/* 模式 tab(最新 / 飙升)+ 源 tab + 搜索框 */}
+      {/* 源 tab + 搜索框 */}
       <div className="mb-4 flex flex-wrap items-center gap-2">
-        <div className="flex gap-1 rounded-md border border-zinc-200 bg-white p-0.5 dark:border-zinc-800 dark:bg-zinc-900">
-          {(["latest", "surging"] as const).map((m) => {
-            const active = mode === m;
-            return (
-              <button
-                key={m}
-                type="button"
-                onClick={() => {
-                  setMode(m);
-                  // 切到飙升时清空搜索框,避免视觉上有"搜索 + 飙升"组合的错觉
-                  if (m === "surging") setQuery("");
-                }}
-                className={
-                  "rounded px-3 py-1 text-sm transition " +
-                  (active
-                    ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
-                    : "text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800")
-                }
-              >
-                {m === "latest" ? "最新" : "🚀 飙升"}
-              </button>
-            );
-          })}
-        </div>
-
         <div className="flex gap-1 rounded-md border border-zinc-200 bg-white p-0.5 dark:border-zinc-800 dark:bg-zinc-900">
           {SOURCES.map((s) => {
             const active = source === s.key;
@@ -568,39 +546,14 @@ export default function Home() {
           })}
         </div>
 
-        {mode === "surging" ? (
-          // 飙升模式:展示窗口选择,不显示搜索框
-          <div className="ml-auto flex items-center gap-1 text-xs text-zinc-500">
-            <span>窗口</span>
-            {([1, 6, 24] as const).map((h) => {
-              const active = surgeWindow === h;
-              return (
-                <button
-                  key={h}
-                  type="button"
-                  onClick={() => setSurgeWindow(h)}
-                  className={
-                    "rounded px-2 py-1 transition " +
-                    (active
-                      ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
-                      : "hover:bg-zinc-100 dark:hover:bg-zinc-800")
-                  }
-                >
-                  {h}h
-                </button>
-              );
-            })}
-          </div>
-        ) : (
-          <input
-            type="search"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="搜索标题或内容…"
-            aria-label="搜索"
-            className="ml-auto min-w-0 flex-1 rounded-md border border-zinc-200 bg-white px-3 py-1 text-sm outline-none placeholder:text-zinc-400 focus:border-zinc-400 dark:border-zinc-800 dark:bg-zinc-900 dark:focus:border-zinc-600"
-          />
-        )}
+        <input
+          type="search"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="搜索标题或内容…"
+          aria-label="搜索"
+          className="ml-auto min-w-0 flex-1 rounded-md border border-zinc-200 bg-white px-3 py-1 text-sm outline-none placeholder:text-zinc-400 focus:border-zinc-400 dark:border-zinc-800 dark:bg-zinc-900 dark:focus:border-zinc-600"
+        />
       </div>
 
       {/* 邮件订阅区(默认折叠)。
@@ -691,9 +644,7 @@ export default function Home() {
 
       {!loading && articles.length === 0 && !error && (
         <div className="rounded-md border border-dashed border-zinc-300 p-8 text-center text-sm text-zinc-500 dark:border-zinc-700">
-          {mode === "surging"
-            ? `过去 ${surgeWindow} 小时没有显著飙升的条目,试试更大窗口或切换源`
-            : "没有匹配的内容"}
+          没有匹配的内容
         </div>
       )}
 
@@ -772,15 +723,24 @@ export default function Home() {
                         prevValue={a.prev_heat_value}
                       />
                     )}
-                    {/* 飙升 delta:仅 surging 接口返回时展示。
-                        语义不同于 HeatBadge 的趋势(那个是相邻两次抓取),
-                        这个是窗口期(1/6/24h)累计涨幅,所以单独一个标。*/}
-                    {mode === "surging" && a.surge_delta && a.surge_delta > 0 && (
+                    {/* 同源 Top 10:在当前列表里、按 heat_value 降序排前 10 名 */}
+                    {topIdsBySource.has(a.id) && (
                       <span
-                        className="inline-flex shrink-0 items-center gap-0.5 rounded-full bg-orange-100 px-2 py-0.5 text-xs font-medium text-orange-700 dark:bg-orange-950 dark:text-orange-400"
-                        title={`过去 ${surgeWindow} 小时累计上涨 ${formatHeat(a.surge_delta)}`}
+                        className="inline-flex shrink-0 items-center rounded-full bg-amber-100 px-1.5 py-0.5 text-xs font-medium text-amber-700 dark:bg-amber-950 dark:text-amber-400"
+                        title="同源热度 / 播放量 Top 10"
+                        aria-label="同源 Top 10"
                       >
-                        🚀 +{formatHeat(a.surge_delta)} / {surgeWindow}h
+                        🏆
+                      </span>
+                    )}
+                    {/* 飙升:相比 30 分钟前热度增幅 ≥ 30% */}
+                    {isSurging(a) && (
+                      <span
+                        className="inline-flex shrink-0 items-center rounded-full bg-orange-100 px-1.5 py-0.5 text-xs font-medium text-orange-700 dark:bg-orange-950 dark:text-orange-400"
+                        title="近 30 分钟热度飙升(增幅 ≥ 30%)"
+                        aria-label="飙升"
+                      >
+                        🚀
                       </span>
                     )}
                   </div>
