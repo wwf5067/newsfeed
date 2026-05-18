@@ -30,6 +30,7 @@ func NewRouter(h *Handler) http.Handler {
 
 		// 关键词订阅 CRUD。无鉴权,部署时由 nginx 层做访问控制(IP 白名单/basic auth)。
 		r.Get("/subscriptions", h.ListSubscriptions)
+		r.Get("/subscriptions/preview", h.PreviewSubscription)
 		r.Post("/subscriptions", h.AddSubscription)
 		r.Delete("/subscriptions/{id}", h.DeleteSubscription)
 	})

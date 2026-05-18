@@ -55,6 +55,8 @@ services:
       LOG_LEVEL: info
       DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable
       API_ADDR: ":8080"
+      # api 不发邮件,但 GET /subscriptions 要回显 notify_to 给前端展示
+      DIGEST_TO: ${DIGEST_TO:-}
     depends_on:
       postgres:
         condition: service_healthy

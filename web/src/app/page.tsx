@@ -305,6 +305,45 @@ function useSubscriptions() {
   return { items, notifyTo, loading, error, add, remove };
 }
 
+// usePreview 根据输入的 keyword 在近 7 天文章里查命中量,返回 {count, samples, loading}。
+// 350ms 防抖,空串立刻清空结果。AbortController 防止快速打字时旧请求覆盖新结果。
+type PreviewSample = { id: number; title: string; source_key: string };
+type PreviewState = { count: number; samples: PreviewSample[]; loading: boolean };
+
+function usePreview(keyword: string): PreviewState {
+  const [state, setState] = useState<PreviewState>({ count: 0, samples: [], loading: false });
+
+  useEffect(() => {
+    const v = keyword.trim();
+    if (!v) {
+      setState({ count: 0, samples: [], loading: false });
+      return;
+    }
+    setState((s) => ({ ...s, loading: true }));
+    const ctrl = new AbortController();
+    const timer = setTimeout(async () => {
+      try {
+        const res = await fetch(
+          `/api/v1/subscriptions/preview?keyword=${encodeURIComponent(v)}`,
+          { cache: "no-store", signal: ctrl.signal }
+        );
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data: { count: number; samples: PreviewSample[] } = await res.json();
+        setState({ count: data.count ?? 0, samples: data.samples ?? [], loading: false });
+      } catch (e) {
+        if ((e as Error).name === "AbortError") return;
+        setState({ count: 0, samples: [], loading: false });
+      }
+    }, 350);
+    return () => {
+      clearTimeout(timer);
+      ctrl.abort();
+    };
+  }, [keyword]);
+
+  return state;
+}
+
 // level → Tailwind class 映射。深色模式自动适配。
 // quote 是 crawler 每日轮询发布的名言,用中性偏文艺的紫灰区分于通知类。
 const LEVEL_CLASSES: Record<Announcement["level"], string> = {
@@ -332,6 +371,111 @@ function writeDismissed(ids: number[]): void {
   } catch {
     // localStorage 可能因隐私模式不可用,静默忽略
   }
+}
+
+// extractKeywordCandidates 把一段标题切成可订阅的候选词:
+//   - 中英分隔符通配:空格、标点、emoji、引号等
+//   - 过滤过短(< 2 字符)、纯数字、纯标点
+//   - 去重后保留原顺序,最多 8 个
+// 用户可以从中点选,避免手敲长标题或拷字。
+function extractKeywordCandidates(title: string): string[] {
+  if (!title) return [];
+  // 切分符号:CJK / 拉丁标点、空白、各种引号括号。emoji 一般不在 \p{L}\p{N},会被分隔。
+  const tokens = title.split(/[\s,，。.!！?？:：;；、|/\\\-—–_(){}\[\]【】「」『』"'"'`~@#$%^&*+=<>·]+/u);
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of tokens) {
+    const t = raw.trim();
+    if (t.length < 2) continue;        // 单字过窄,容易误命中
+    if (/^\d+$/.test(t)) continue;      // 纯数字
+    if (!/[\p{L}\p{N}]/u.test(t)) continue; // 无任何字母数字(全是残留符号)
+    if (t.length > 32) continue;        // 太长不像关键词
+    const key = t.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(t);
+    if (out.length >= 8) break;
+  }
+  return out;
+}
+
+// SubscribePopover 卡片上 🔔 按钮点击后弹出的小面板,展示标题切出来的候选关键词。
+// 用户点 chip 直接订阅(POST /subscriptions),不需要打开订阅折叠面板。
+// 已经订阅过的词用灰色禁用,避免重复点击产生疑惑。
+function SubscribePopover({
+  title,
+  existing,
+  onPick,
+  onClose,
+}: {
+  title: string;
+  existing: Set<string>; // 已订阅关键词的 lower-case 集合
+  onPick: (keyword: string) => void;
+  onClose: () => void;
+}) {
+  const ref = useRef<HTMLDivElement | null>(null);
+  const candidates = useMemo(() => extractKeywordCandidates(title), [title]);
+
+  // 点击 popover 外部 / 按 Esc 关闭
+  useEffect(() => {
+    const onDown = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) onClose();
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    // 延后挂载,避免同一次 click 立刻触发关闭
+    const t = setTimeout(() => {
+      document.addEventListener("mousedown", onDown);
+      document.addEventListener("keydown", onKey);
+    }, 0);
+    return () => {
+      clearTimeout(t);
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [onClose]);
+
+  return (
+    <div
+      ref={ref}
+      role="dialog"
+      aria-label="订阅关键词"
+      className="absolute right-3 top-10 z-20 w-64 rounded-lg border border-zinc-200 bg-white p-3 shadow-lg dark:border-zinc-700 dark:bg-zinc-800"
+    >
+      <div className="mb-2 text-xs text-zinc-500">点关键词订阅,命中后邮件通知</div>
+      {candidates.length === 0 ? (
+        <div className="text-xs text-zinc-500">标题里没有合适的候选词</div>
+      ) : (
+        <div className="flex flex-wrap gap-1.5">
+          {candidates.map((kw) => {
+            const dup = existing.has(kw.toLowerCase());
+            return (
+              <button
+                key={kw}
+                type="button"
+                disabled={dup}
+                onClick={() => {
+                  onPick(kw);
+                  onClose();
+                }}
+                className={
+                  "rounded-full px-2 py-0.5 text-xs transition " +
+                  (dup
+                    ? "cursor-not-allowed bg-zinc-100 text-zinc-400 dark:bg-zinc-700 dark:text-zinc-500"
+                    : "bg-zinc-100 text-zinc-700 hover:bg-zinc-900 hover:text-white dark:bg-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-100 dark:hover:text-zinc-900")
+                }
+                title={dup ? "已订阅" : `订阅「${kw}」`}
+              >
+                {kw}
+                {dup && " ✓"}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
 }
 
 function AnnouncementBar() {
@@ -423,6 +567,15 @@ export default function Home() {
   const subs = useSubscriptions();
   const [keywordInput, setKeywordInput] = useState("");
   const [subOpen, setSubOpen] = useState(false);
+  // 输入时实时预览近 7 天的命中量,帮用户评估关键词是否会"太宽/太冷"
+  const preview = usePreview(keywordInput);
+  // 当前展开"订阅 popover"的文章 id;-1 表示无。同一时刻只允许一个 popover。
+  const [subPopoverFor, setSubPopoverFor] = useState<number>(-1);
+  // 已订阅关键词 lower-case 集合,供 popover 标灰已订阅过的 chip
+  const existingKeywords = useMemo(
+    () => new Set(subs.items.map((s) => s.keyword.toLowerCase())),
+    [subs.items]
+  );
 
   // 全局 toast(短暂提示,如"分享链接已复制")
   const [toast, setToast] = useState<string | null>(null);
@@ -628,6 +781,27 @@ export default function Home() {
                 添加
               </button>
             </form>
+            {/* 输入预览:让用户在按下"添加"前就知道这个关键词在已有文章里能匹配多少条,
+                避免订到一个永远不会命中的冷门词或者一个会刷屏的热门词。
+                显示的是"近 7 天"的存量命中,新文章被抓到后的"未来命中"另算。*/}
+            {keywordInput.trim() && (
+              <div className="mt-2 text-xs text-zinc-500">
+                {preview.loading ? (
+                  <span>匹配检测中…</span>
+                ) : preview.count === 0 ? (
+                  <span>近 7 天暂无命中。未来抓到含此词的文章会通知你。</span>
+                ) : (
+                  <>
+                    <span>
+                      近 7 天匹配 <span className="font-medium text-zinc-700 dark:text-zinc-300">{preview.count}</span> 条
+                    </span>
+                    {preview.samples.length > 0 && (
+                      <span className="text-zinc-400"> · 例: {preview.samples.map((s) => s.title).slice(0, 2).join(" / ")}</span>
+                    )}
+                  </>
+                )}
+              </div>
+            )}
             <div className="mt-3 text-xs text-zinc-500">
               {subs.notifyTo
                 ? <>命中后会发邮件到 <span className="font-mono">{subs.notifyTo}</span>,延迟约等于抓取间隔(30 分钟内)</>
@@ -699,6 +873,31 @@ export default function Home() {
               >
                 ↗
               </button>
+              {/* 一键订阅:从标题切候选词,点 chip 即订阅 */}
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  setSubPopoverFor((cur) => (cur === a.id ? -1 : a.id));
+                }}
+                aria-label="订阅本条标题关键词"
+                aria-expanded={subPopoverFor === a.id}
+                className="absolute right-[3.75rem] top-3 rounded p-1 text-sm text-zinc-300 transition hover:text-zinc-700 dark:text-zinc-600 dark:hover:text-zinc-200"
+              >
+                🔔
+              </button>
+              {subPopoverFor === a.id && (
+                <SubscribePopover
+                  title={a.title}
+                  existing={existingKeywords}
+                  onPick={(kw) => {
+                    subs.add(kw);
+                    setToast(`已订阅「${kw}」`);
+                  }}
+                  onClose={() => setSubPopoverFor(-1)}
+                />
+              )}
               <Link
                 href={`/article?id=${a.id}`}
                 onClick={() => read.add(a.id)}
