@@ -2,6 +2,8 @@ package api
 
 import (
 	"context"
+	"fmt"
+	"strings"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/wwf5067/newsfeed/internal/model"
@@ -16,17 +18,43 @@ func NewRepository(pool *pgxpool.Pool) *Repository {
 	return &Repository{pool: pool}
 }
 
-// ListArticles 简单分页查询,后续按业务再扩展过滤条件。
-func (r *Repository) ListArticles(ctx context.Context, limit, offset int) ([]model.Article, error) {
-	const q = `
+// ListArticles 分页查询。
+// query 非空时按 title/content ILIKE 过滤;sourceKey 非空时按源精确匹配。
+// 当前数据量(几千行 + 30 天 retention)ILIKE 完全跑得动,等量级到十万再考虑全文索引。
+func (r *Repository) ListArticles(ctx context.Context, limit, offset int, query, sourceKey string) ([]model.Article, error) {
+	var (
+		conds []string
+		args  []any
+	)
+
+	if sourceKey != "" {
+		args = append(args, sourceKey)
+		conds = append(conds, fmt.Sprintf("source_key = $%d", len(args)))
+	}
+	if query != "" {
+		args = append(args, "%"+query+"%")
+		idx := len(args)
+		conds = append(conds, fmt.Sprintf("(title ILIKE $%d OR content ILIKE $%d)", idx, idx))
+	}
+
+	where := ""
+	if len(conds) > 0 {
+		where = "WHERE " + strings.Join(conds, " AND ")
+	}
+
+	args = append(args, limit, offset)
+	limitIdx, offsetIdx := len(args)-1, len(args)
+	q := fmt.Sprintf(`
 SELECT id, source_key, url, title, content, author,
        heat, heat_value, prev_heat, prev_heat_value,
        published_at, fetched_at
 FROM articles
+%s
 ORDER BY published_at DESC
-LIMIT $1 OFFSET $2
-`
-	rows, err := r.pool.Query(ctx, q, limit, offset)
+LIMIT $%d OFFSET $%d
+`, where, limitIdx, offsetIdx)
+
+	rows, err := r.pool.Query(ctx, q, args...)
 	if err != nil {
 		return nil, err
 	}

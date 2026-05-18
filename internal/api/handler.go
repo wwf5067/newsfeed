@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/wwf5067/newsfeed/internal/model"
 )
@@ -33,17 +34,32 @@ func (h *Handler) ListArticles(w http.ResponseWriter, r *http.Request) {
 		offset = 0
 	}
 
-	articles, err := h.repo.ListArticles(r.Context(), limit, offset)
+	// q: 标题/正文模糊匹配;source: 按 source_key 精确筛选(空=全部)
+	q := strings.TrimSpace(r.URL.Query().Get("q"))
+	if len(q) > 100 {
+		q = q[:100]
+	}
+	source := strings.TrimSpace(r.URL.Query().Get("source"))
+	if len(source) > 64 {
+		source = ""
+	}
+
+	articles, err := h.repo.ListArticles(r.Context(), limit, offset, q, source)
 	if err != nil {
 		h.logger.Error("list articles", "err", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
 		return
+	}
+	if articles == nil {
+		articles = []model.Article{}
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"items":  articles,
 		"limit":  limit,
 		"offset": offset,
+		"q":      q,
+		"source": source,
 	})
 }
 
