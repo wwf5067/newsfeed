@@ -239,14 +239,20 @@ function ArticleContent() {
         </div>
 
         <div className="border-t border-zinc-200 pt-4 dark:border-zinc-800">
+          {/* 长 URL 在窄屏(尤其是手机)上不换行会溢出容器,
+              break-all 保证任意位置都能断;按钮宽度自适应内容,
+              加 max-w-full 防 flex 父容器下被撑出。*/}
           <a
             href={article.url}
             target="_blank"
             rel="noreferrer"
-            className="inline-block rounded-md bg-zinc-900 px-4 py-2 text-sm text-white transition hover:bg-zinc-700 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
+            className="inline-block max-w-full break-all rounded-md bg-zinc-900 px-4 py-2 text-sm text-white transition hover:bg-zinc-700 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
           >
             访问原文 →
           </a>
+          <div className="mt-2 break-all text-xs text-zinc-400 dark:text-zinc-600">
+            {article.url}
+          </div>
         </div>
       </article>
     </main>
