@@ -53,6 +53,10 @@ var trackerEntityAliasIndex = buildTrackerEntityAliasIndex(trackerEntityLexicon)
 
 var trackerEntityLabelSet = buildTrackerEntityLabelSet(trackerEntityLexicon)
 
+var trackerEntityAliasToLabel = buildTrackerEntityAliasToLabel(trackerEntityLexicon)
+
+var trackerEntityTermsByLabel = buildTrackerEntityTermsByLabel(trackerEntityLexicon)
+
 func buildTrackerEntityLabelSet(entries []trackerLexiconEntry) map[string]struct{} {
 	set := make(map[string]struct{}, len(entries))
 	for _, entry := range entries {
@@ -63,4 +67,48 @@ func buildTrackerEntityLabelSet(entries []trackerLexiconEntry) map[string]struct
 		set[label] = struct{}{}
 	}
 	return set
+}
+
+func buildTrackerEntityAliasToLabel(entries []trackerLexiconEntry) map[string]string {
+	out := make(map[string]string, len(entries)*4)
+	for _, entry := range entries {
+		label := normalizeTrackerToken(entry.Label)
+		if label == "" {
+			continue
+		}
+		out[label] = label
+		for _, alias := range entry.Aliases {
+			needle := normalizeTrackerToken(alias)
+			if needle == "" {
+				continue
+			}
+			out[needle] = label
+		}
+	}
+	return out
+}
+
+func buildTrackerEntityTermsByLabel(entries []trackerLexiconEntry) map[string][]string {
+	out := make(map[string][]string, len(entries))
+	for _, entry := range entries {
+		label := normalizeTrackerToken(entry.Label)
+		if label == "" {
+			continue
+		}
+		seen := map[string]struct{}{label: {}}
+		terms := []string{label}
+		for _, alias := range entry.Aliases {
+			needle := normalizeTrackerToken(alias)
+			if needle == "" {
+				continue
+			}
+			if _, ok := seen[needle]; ok {
+				continue
+			}
+			seen[needle] = struct{}{}
+			terms = append(terms, needle)
+		}
+		out[label] = terms
+	}
+	return out
 }

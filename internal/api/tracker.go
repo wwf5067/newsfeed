@@ -328,6 +328,7 @@ func extractTrackerCandidates(article model.Article) []trackerCandidate {
 }
 
 func appendTrackerPool(pool *[]string, seen map[string]struct{}, label string) {
+	label = canonicalizeTrackerToken(label)
 	if label == "" {
 		return
 	}
@@ -336,6 +337,16 @@ func appendTrackerPool(pool *[]string, seen map[string]struct{}, label string) {
 	}
 	seen[label] = struct{}{}
 	*pool = append(*pool, label)
+}
+
+func canonicalizeTrackerToken(token string) string {
+	if token == "" {
+		return ""
+	}
+	if label, ok := trackerEntityAliasToLabel[token]; ok {
+		return label
+	}
+	return token
 }
 
 func buildTrackerEntityAliasIndex(entries []trackerLexiconEntry) []trackerLexiconAlias {
@@ -671,6 +682,7 @@ func collectTrackerRelatedTerms(tokens []string, label string) []string {
 	terms := make([]string, 0, 4)
 	seen := map[string]struct{}{}
 	for _, token := range tokens {
+		token = canonicalizeTrackerToken(token)
 		if token == "" || token == label {
 			continue
 		}
@@ -686,7 +698,76 @@ func collectTrackerRelatedTerms(tokens []string, label string) []string {
 			break
 		}
 	}
+	if len(terms) > 0 {
+		return terms
+	}
+	for _, alias := range trackerEntityTermsByLabel[label] {
+		normalized := normalizeTrackerToken(alias)
+		if normalized == "" || strings.EqualFold(normalized, label) {
+			continue
+		}
+		if !shouldKeepTrackerToken(normalized) && !trackerAliasRequiresBoundary(strings.ToLower(normalized)) {
+			continue
+		}
+		if canonical := canonicalizeTrackerToken(normalized); canonical != label && canonical != "" {
+			continue
+		}
+		terms = append(terms, normalized)
+		if len(terms) == 2 {
+			break
+		}
+	}
 	return terms
+}
+
+func trackerTermMatchesArticle(term string, article model.Article) bool {
+	term = normalizeTrackerToken(term)
+	if term == "" {
+		return false
+	}
+	canonical := canonicalizeTrackerToken(term)
+	if canonical != "" && canonical != term {
+		for _, alias := range trackerEntityTermsByLabel[canonical] {
+			if trackerTermMatchesArticle(alias, article) {
+				return true
+			}
+		}
+		return false
+	}
+	title := strings.ToLower(article.Title)
+	content := strings.ToLower(article.Content)
+	needle := strings.ToLower(term)
+	if trackerAliasRequiresBoundary(needle) {
+		return containsTrackerAliasWithBoundary(title, needle) || containsTrackerAliasWithBoundary(content, needle)
+	}
+	return strings.Contains(title, needle) || strings.Contains(content, needle)
+}
+
+func scoreTrackerTermMatch(term string, article model.Article) int {
+	term = normalizeTrackerToken(term)
+	if term == "" {
+		return 0
+	}
+	title := strings.ToLower(article.Title)
+	content := strings.ToLower(article.Content)
+	needle := strings.ToLower(term)
+	weight := 0
+	if trackerAliasRequiresBoundary(needle) {
+		if containsTrackerAliasWithBoundary(title, needle) {
+			weight += 3
+		}
+		if containsTrackerAliasWithBoundary(content, needle) {
+			weight += 1
+		}
+	} else {
+		if strings.Contains(title, needle) {
+			weight += 3
+		}
+		if strings.Contains(content, needle) {
+			weight += 1
+		}
+	}
+	return weight
 }
 
 func scoreArticle(article model.Article) int64 {
@@ -802,9 +883,17 @@ func buildRelatedTrackers(term string, articles []model.Article, limit int) []tr
 }
 
 func filterArticlesByTerm(term string, articles []model.Article) []model.Article {
-	term = strings.TrimSpace(strings.ToLower(term))
+	term = normalizeTrackerToken(term)
 	if term == "" {
 		return nil
+	}
+
+	canonical := canonicalizeTrackerToken(term)
+	terms := []string{term}
+	if canonical != "" {
+		if aliases := trackerEntityTermsByLabel[canonical]; len(aliases) > 0 {
+			terms = aliases
+		}
 	}
 
 	type scored struct {
@@ -814,14 +903,9 @@ func filterArticlesByTerm(term string, articles []model.Article) []model.Article
 
 	matches := make([]scored, 0, len(articles))
 	for _, article := range articles {
-		title := strings.ToLower(article.Title)
-		content := strings.ToLower(article.Content)
 		weight := 0
-		if strings.Contains(title, term) {
-			weight += 3
-		}
-		if strings.Contains(content, term) {
-			weight++
+		for _, candidate := range terms {
+			weight += scoreTrackerTermMatch(candidate, article)
 		}
 		if weight > 0 {
 			matches = append(matches, scored{article: article, weight: weight})
