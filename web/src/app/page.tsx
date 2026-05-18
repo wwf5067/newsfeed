@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback, useRef } from "react";
+import Link from "next/link";
 
 type Article = {
   id: number;
@@ -715,10 +716,8 @@ export default function Home() {
               >
                 ↗
               </button>
-              <a
-                href={a.url}
-                target="_blank"
-                rel="noreferrer"
+              <Link
+                href={`/article/${a.id}`}
                 onClick={() => read.add(a.id)}
                 className="flex gap-3 pr-16"
               >
@@ -729,7 +728,7 @@ export default function Home() {
                   <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
                     <h2
                       className={
-                        "text-base font-medium leading-snug group-hover:underline " +
+                        "text-base font-medium leading-snug hover:underline " +
                         (isRead
                           ? "text-zinc-500 dark:text-zinc-500"
                           : "text-zinc-900 dark:text-zinc-100")
@@ -751,12 +750,27 @@ export default function Home() {
                       {a.content}
                     </p>
                   )}
-                  <div className="mt-2 flex gap-3 text-xs text-zinc-500">
+                  <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-zinc-500">
                     <span>{a.source_key}</span>
                     <span>{formatTime(a.published_at)}</span>
+                    {/* 独立的"原文"链接。注意 Link 内不能再嵌套 <a>,
+                        所以用 button + window.open 模拟链接,stopPropagation
+                        阻止外层 Link 抢走点击 */}
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        read.add(a.id);
+                        window.open(a.url, "_blank", "noreferrer");
+                      }}
+                      className="ml-auto text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100"
+                    >
+                      原文 ↗
+                    </button>
                   </div>
                 </div>
-              </a>
+              </Link>
             </li>
           );
         })}
