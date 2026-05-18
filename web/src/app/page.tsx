@@ -105,11 +105,21 @@ function formatHeat(v: number): string {
 
 // HeatBadge 统一热度展示样式:🔥 主热度 + 可选趋势(↑/↓ 差值)。
 // 趋势仅在 prev_value > 0 且与当前不同时显示,首次抓取的条目不展示趋势。
+// 不同源的热度语义不一样:知乎是"讨论度",B 站是"播放量",量纲也不在同一级。
+// 用不同图标 + tooltip 让用户一眼看出指标类型,避免拿"100 万播放"和"100 万热度"
+// 做心理换算。新增源时在此追加一项即可,默认走 fire 配置。
+const HEAT_ICONS: Record<string, { icon: string; label: string }> = {
+  zhihu_hot: { icon: "🔥", label: "热度" },
+  bilibili_popular: { icon: "▶", label: "播放量" },
+};
+
 function HeatBadge({
+  sourceKey,
   heat,
   value,
   prevValue,
 }: {
+  sourceKey: string;
   heat: string;
   value: number;
   prevValue: number;
@@ -117,14 +127,18 @@ function HeatBadge({
   const main = heat || formatHeat(value);
   if (!main) return null;
 
+  const meta = HEAT_ICONS[sourceKey] ?? { icon: "🔥", label: "热度" };
   const hasTrend = prevValue > 0 && value > 0 && value !== prevValue;
   const diff = value - prevValue;
   const up = diff > 0;
   const trendText = hasTrend ? formatHeat(Math.abs(diff)) : "";
 
   return (
-    <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-red-50 px-2 py-0.5 text-xs font-medium tabular-nums text-red-600 dark:bg-red-950 dark:text-red-400">
-      <span aria-hidden="true">🔥</span>
+    <span
+      className="inline-flex shrink-0 items-center gap-1 rounded-full bg-red-50 px-2 py-0.5 text-xs font-medium tabular-nums text-red-600 dark:bg-red-950 dark:text-red-400"
+      title={meta.label}
+    >
+      <span aria-hidden="true">{meta.icon}</span>
       <span>{main}</span>
       {hasTrend && (
         <span
@@ -133,7 +147,7 @@ function HeatBadge({
               ? "text-emerald-600 dark:text-emerald-400"
               : "text-zinc-500 dark:text-zinc-400"
           }
-          title={`相比上次 ${up ? "上升" : "下降"} ${trendText}`}
+          title={`${meta.label}相比上次${up ? "上升" : "下降"} ${trendText}`}
         >
           {up ? "↑" : "↓"}
           {trendText}
@@ -472,6 +486,7 @@ export default function Home() {
                     </h2>
                     {(a.heat || a.heat_value > 0) && (
                       <HeatBadge
+                        sourceKey={a.source_key}
                         heat={a.heat}
                         value={a.heat_value}
                         prevValue={a.prev_heat_value}
