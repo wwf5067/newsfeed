@@ -193,4 +193,46 @@ jobs:
           # 镜像没变时 `up -d` 不会重启 nginx,这里强制重启刷新 bind mount。
           docker compose -f docker-compose.prod.yml restart nginx
           docker compose -f docker-compose.prod.yml ps
+
+          # ---- 远端自检:确认容器真的换上了新镜像 + 服务能响应 ----
+          # 没这个的话,SSH 中途 broken pipe / 镜像 pull 失败时,Actions 会假装 success。
+          echo "==> Verifying deployment on host..."
+
+          EXPECTED_API="ghcr.io/${OWNER}/newsfeed-api:${IMAGE_TAG}"
+          EXPECTED_CRAWLER="ghcr.io/${OWNER}/newsfeed-crawler:${IMAGE_TAG}"
+
+          ACTUAL_API=$(docker inspect --format '{{.Config.Image}}' newsfeed-api-1)
+          ACTUAL_CRAWLER=$(docker inspect --format '{{.Config.Image}}' newsfeed-crawler-1)
+
+          if [ "$ACTUAL_API" != "$EXPECTED_API" ]; then
+            echo "ERROR: api container image mismatch: expected=$EXPECTED_API actual=$ACTUAL_API" >&2
+            exit 1
+          fi
+          if [ "$ACTUAL_CRAWLER" != "$EXPECTED_CRAWLER" ]; then
+            echo "ERROR: crawler container image mismatch: expected=$EXPECTED_CRAWLER actual=$ACTUAL_CRAWLER" >&2
+            exit 1
+          fi
+
+          # 等服务起来,最多 30 秒
+          for i in $(seq 1 15); do
+            code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 3 http://127.0.0.1/ || echo "000")
+            if [ "$code" = "200" ]; then
+              echo "==> Healthcheck passed on attempt $i (HTTP $code)"
+              break
+            fi
+            if [ "$i" = "15" ]; then
+              echo "ERROR: healthcheck failed after 15 attempts (last code: $code)" >&2
+              docker compose -f docker-compose.prod.yml logs --tail 30 nginx api >&2 || true
+              exit 1
+            fi
+            sleep 2
+          done
+
+          # 顺便验证 API 路由
+          api_code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 3 "http://127.0.0.1/api/v1/articles?limit=1" || echo "000")
+          if [ "$api_code" != "200" ]; then
+            echo "ERROR: /api/v1/articles returned HTTP $api_code" >&2
+            exit 1
+          fi
+          echo "==> Deployment verified: images=${IMAGE_TAG}, http=200, api=200"
           REMOTE
