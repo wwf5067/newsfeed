@@ -70,18 +70,56 @@ type trackerAccumulator struct {
 }
 
 var (
-	trackerTokenRegex = regexp.MustCompile(`[#A-Za-z0-9][#A-Za-z0-9+._-]{1,31}|[\p{Han}]{2,8}`)
-	stopTokens        = map[string]struct{}{
+	// trackerTokenRegex 匹配候选 token:
+	//   1. 中英混合词(如 "iPhone16""AI大模型""ChatGPT概念股"):至少含一个汉字或一个字母,2~16 字符
+	//   2. 纯英文/数字标识(如 "#React""OpenAI"):1~31 字符
+	//   3. 纯中文词:2~12 个汉字(覆盖"国家市场监督管理总局"等长实体)
+	trackerTokenRegex = regexp.MustCompile(
+		`[#A-Za-z0-9][#A-Za-z0-9+._-]{1,31}` + // 纯英文/数字/符号标识
+			`|[\p{Han}A-Za-z0-9][\p{Han}A-Za-z0-9·.]{1,15}` + // 中英混合词(2~16 字符)
+			`|[\p{Han}]{2,12}`, // 纯中文词(2~12 字)
+	)
+
+	// stopTokens 分层停用词:通用虚词 + 疑问代词 + 平台噪音 + 时间/数量 + 单位
+	stopTokens = map[string]struct{}{
+		// —— 通用虚词/代词 ——
+		"这个": {}, "那个": {}, "一个": {}, "一次": {}, "一些": {}, "一种": {},
+		"我们": {}, "你们": {}, "他们": {}, "大家": {}, "自己": {}, "别人": {},
+		"什么": {}, "哪些": {}, "怎么": {}, "如何": {}, "为什么": {}, "为何": {},
+		"是否": {}, "能否": {}, "可以": {}, "可能": {}, "应该": {}, "需要": {},
+		"已经": {}, "正在": {}, "一直": {}, "终于": {}, "到底": {}, "竟然": {},
+		"居然": {}, "其实": {}, "原来": {}, "只是": {}, "而已": {}, "之后": {},
+		"之前": {}, "目前": {}, "当前": {}, "现在": {}, "以后": {}, "以前": {},
+		"表示": {}, "认为": {}, "发现": {}, "出现": {}, "进行": {}, "开始": {},
+		"继续": {}, "成为": {}, "属于": {}, "引发": {}, "导致": {}, "造成": {},
+		"相关": {}, "有关": {}, "关于": {}, "对于": {}, "通过": {}, "根据": {},
+		// —— 平台/媒体噪音 ——
 		"知乎": {}, "热榜": {}, "热门": {}, "视频": {}, "话题": {}, "网友": {},
-		"官方": {}, "今天": {}, "今日": {}, "最新": {}, "回应": {}, "发布": {},
-		"表示": {}, "怎么": {}, "为什么": {}, "如何": {}, "这个": {}, "那个": {},
-		"我们": {}, "你们": {}, "他们": {}, "已经": {}, "正在": {}, "一个": {},
-		"一次": {}, "相关": {}, "内容": {}, "新闻": {}, "记者": {}, "记者称": {},
+		"官方": {}, "回应": {}, "发布": {}, "新闻": {}, "记者": {}, "记者称": {},
 		"万热度": {}, "万播放": {}, "播放": {}, "热度": {}, "全文": {}, "全文如下": {},
 		"直播": {}, "网友称": {}, "详情": {}, "原文": {}, "账号": {}, "博主": {},
 		"评论区": {}, "最新消息": {}, "哔哩哔哩": {}, "bilibili": {}, "B站": {},
+		"关注": {}, "收藏": {}, "转发": {}, "评论": {}, "回答": {}, "问题": {},
+		"曝光": {}, "爆料": {}, "独家": {}, "突发": {}, "重磅": {}, "实锤": {},
+		// —— 时间/数量/程度 ——
+		"今天": {}, "今日": {}, "昨天": {}, "昨日": {}, "明天": {}, "明日": {},
+		"最新": {}, "最近": {}, "最大": {}, "最小": {}, "最高": {}, "最低": {},
+		"非常": {}, "十分": {}, "极其": {}, "特别": {}, "真的": {}, "确实": {},
+		"内容": {}, "方面": {}, "情况": {}, "事情": {}, "东西": {}, "地方": {},
 	}
-	entitySuffixes = []string{"公司", "集团", "大学", "医院", "银行", "汽车", "平台", "手机", "芯片", "模型", "赛事"}
+
+	// entitySuffixes 实体后缀词:带这些后缀的词大概率是命名实体。
+	entitySuffixes = []string{
+		"公司", "集团", "大学", "医院", "银行", "汽车", "平台", "手机", "芯片", "模型",
+		"赛事", "政府", "委员会", "研究院", "实验室", "科技", "电子", "网络", "基金",
+		"联盟", "协会", "机构", "中心", "工厂", "品牌", "航空", "铁路", "地铁",
+	}
+
+	// entityPrefixes 实体前缀词:以这些开头的词大概率是命名实体(地名/机构)。
+	entityPrefixes = []string{
+		"中国", "美国", "日本", "韩国", "俄罗斯", "北京", "上海", "深圳", "广州",
+		"国家", "中央", "全国",
+	}
 )
 
 func buildTrackerTopics(articles []model.Article, now time.Time, windowHours, limit int) []trackerTopic {
@@ -157,6 +195,10 @@ func buildTrackerTopics(articles []model.Article, now time.Time, windowHours, li
 		}
 		return items[i].Label < items[j].Label
 	})
+
+	// 去重合并:如果 topic A 的 label 是 topic B 的子串,且 A 的 Score 不超过 B 的 2 倍,
+	// 则 A 被 B "吸收"——只保留更长/更具体的 B,避免"普京""普京访华"同时出现。
+	items = deduplicateTrackerTopics(items)
 
 	if limit > 0 && len(items) > limit {
 		items = items[:limit]
@@ -256,7 +298,7 @@ func extractTrackerCandidates(article model.Article) []trackerCandidate {
 
 func normalizeTrackerToken(token string) string {
 	token = strings.TrimSpace(token)
-	token = strings.Trim(token, "#.,!?:;，。！？：；（）()[]【】《》\"'“”‘’·-")
+	token = strings.Trim(token, "#.,!?:;\uff0c\u3002\uff01\uff1f\uff1a\uff1b\uff08\uff09()[]\u3010\u3011\u300a\u300b\\\"'\u201c\u201d\u2018\u2019\u00b7-")
 	token = strings.TrimPrefix(token, "#")
 	token = strings.TrimSuffix(token, "#")
 	if token == "" {
@@ -275,24 +317,54 @@ func normalizeTrackerToken(token string) string {
 	if strings.Contains(token, "http") {
 		return ""
 	}
+	// 过滤纯数字 token(年份、数量等无意义数字噪音)
+	if isAllDigits(token) {
+		return ""
+	}
 	return token
 }
 
+// isAllDigits 判断字符串是否全由 ASCII 数字组成。
+func isAllDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
 func looksLikeEntity(token string) bool {
+	// 1. 带 # 前缀的话题标签
 	if strings.HasPrefix(token, "#") {
 		return true
 	}
-	for _, suffix := range entitySuffixes {
-		if strings.HasSuffix(token, suffix) {
-			return true
-		}
-	}
+	// 2. 含大写字母的英文/混合词(如 "ChatGPT""iPhone""OpenAI")
 	for _, r := range token {
 		if r >= 'A' && r <= 'Z' {
 			return true
 		}
 	}
-	return utf8.RuneCountInString(token) >= 3
+	// 3. 带实体后缀的(如 "华为公司""北京大学")
+	for _, suffix := range entitySuffixes {
+		if strings.HasSuffix(token, suffix) {
+			return true
+		}
+	}
+	// 4. 带实体前缀的(如 "中国移动""美国总统")
+	for _, prefix := range entityPrefixes {
+		if strings.HasPrefix(token, prefix) && utf8.RuneCountInString(token) > utf8.RuneCountInString(prefix) {
+			return true
+		}
+	}
+	// 5. 较长的中文词(>=4 字)更可能是专有名词而非普通动词/形容词
+	if utf8.RuneCountInString(token) >= 4 {
+		return true
+	}
+	return false
 }
 
 func collectTrackerRelatedTerms(tokens []string, label string) []string {
@@ -411,34 +483,58 @@ func filterArticlesByTerm(term string, articles []model.Article) []model.Article
 	if term == "" {
 		return nil
 	}
-	out := make([]model.Article, 0, len(articles))
+
+	type scored struct {
+		article model.Article
+		weight  int // title 命中权重 3,content 命中权重 1
+	}
+
+	var matches []scored
 	for _, article := range articles {
-		body := strings.ToLower(article.Title + "\n" + article.Content)
-		if strings.Contains(body, term) {
-			out = append(out, article)
+		title := strings.ToLower(article.Title)
+		content := strings.ToLower(article.Content)
+		w := 0
+		if strings.Contains(title, term) {
+			w += 3
+		}
+		if strings.Contains(content, term) {
+			w += 1
+		}
+		if w > 0 {
+			matches = append(matches, scored{article: article, weight: w})
 		}
 	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].PublishedAt.Equal(out[j].PublishedAt) {
-			return out[i].HeatValue > out[j].HeatValue
+
+	// 排序:先按权重降序,再按发布时间降序,最后按热度降序
+	sort.Slice(matches, func(i, j int) bool {
+		if matches[i].weight != matches[j].weight {
+			return matches[i].weight > matches[j].weight
 		}
-		return out[i].PublishedAt.After(out[j].PublishedAt)
+		if !matches[i].article.PublishedAt.Equal(matches[j].article.PublishedAt) {
+			return matches[i].article.PublishedAt.After(matches[j].article.PublishedAt)
+		}
+		return matches[i].article.HeatValue > matches[j].article.HeatValue
 	})
-	if len(out) > 20 {
-		out = out[:20]
+
+	if len(matches) > 20 {
+		matches = matches[:20]
+	}
+	out := make([]model.Article, 0, len(matches))
+	for _, m := range matches {
+		out = append(out, m.article)
 	}
 	return out
 }
 
 func buildTrackerSummary(term string, articles []model.Article, windowHours int) []string {
 	if len(articles) == 0 {
-		return []string{"当前窗口内还没有足够的相关文章。"}
+		return []string{"当前窗口内还没有足够的关于「" + term + "」的相关文章。"}
 	}
 
 	bullets := []string{}
 	latest := articles[0]
 	bullets = append(bullets,
-		"最近 "+strconv.Itoa(windowHours)+" 小时内出现 "+strconv.Itoa(len(articles))+" 条相关文章，最新进展是《"+latest.Title+"》。")
+		"最近 "+strconv.Itoa(windowHours)+" 小时内出现 "+strconv.Itoa(len(articles))+" 条关于「"+term+"」的相关文章，最新进展是《"+latest.Title+"》。")
 
 	sourceCounts := map[string]int{}
 	for _, article := range articles {
@@ -472,4 +568,57 @@ func maxInt64(a, b int64) int64 {
 		return a
 	}
 	return b
+}
+
+// deduplicateTrackerTopics 去除话题列表中的子串重叠:
+// 如果短 topic A 的 label 是长 topic B 的子串(如"普京"⊂"普京访华"),
+// 且 A.Score <= B.Score*2,则将 A 标记为"被吸收",从结果中移除。
+// 保留更长/更具体的话题,避免列表出现大量重叠条目。
+//
+// 输入已按权重排序,输出保持原序。复杂度 O(n²),n 通常 <50,可接受。
+func deduplicateTrackerTopics(items []trackerTopic) []trackerTopic {
+	if len(items) <= 1 {
+		return items
+	}
+
+	absorbed := make([]bool, len(items))
+	for i := range items {
+		if absorbed[i] {
+			continue
+		}
+		for j := range items {
+			if i == j || absorbed[j] {
+				continue
+			}
+			li := []rune(items[i].Label)
+			lj := []rune(items[j].Label)
+
+			// 只在长度严格不等时做子串判定(等长不互相吸收)
+			if len(li) == len(lj) {
+				continue
+			}
+
+			// 短的可能是长的子串
+			short, long := i, j
+			if len(li) > len(lj) {
+				short, long = j, i
+			}
+			if !strings.Contains(items[long].Label, items[short].Label) {
+				continue
+			}
+			// 短的被长的吸收条件:短的 score 不超过长的 2 倍
+			// (如果短的 score 远高于长的,说明短词本身就是独立热点,不应被吸收)
+			if items[short].Score <= items[long].Score*2 {
+				absorbed[short] = true
+			}
+		}
+	}
+
+	out := make([]trackerTopic, 0, len(items))
+	for i, item := range items {
+		if !absorbed[i] {
+			out = append(out, item)
+		}
+	}
+	return out
 }

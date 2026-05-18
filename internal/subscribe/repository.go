@@ -113,10 +113,15 @@ func (r *Repository) Delete(ctx context.Context, id int64) (bool, error) {
 //   - articles ⨯ keyword_subscriptions 笛卡尔配对
 //   - WHERE title || content ILIKE '%' || keyword || '%'
 //   - LEFT JOIN keyword_notifications 过滤掉已通知组合
+//
+// 安全:keyword 通过 escape_like() 转义 %、_、\ 三个 LIKE 通配字符,
+// 防止用户输入"50%"或"a_b"导致匹配行为异常。
 func (r *Repository) FindHits(ctx context.Context, articleIDs []int64) ([]Hit, error) {
 	if len(articleIDs) == 0 {
 		return nil, nil
 	}
+	// escape_like: 内联 SQL 函数,将 keyword 中的 \, %, _ 转义后再拼 ILIKE。
+	// 用 ESCAPE '\' 声明转义字符。
 	const q = `
 SELECT
     s.id, s.keyword,
@@ -127,8 +132,8 @@ LEFT JOIN keyword_notifications n
        ON n.subscription_id = s.id AND n.article_id = a.id
 WHERE a.id = ANY($1)
   AND n.subscription_id IS NULL
-  AND (a.title ILIKE '%' || s.keyword || '%'
-       OR a.content ILIKE '%' || s.keyword || '%')
+  AND (a.title ILIKE '%' || replace(replace(replace(s.keyword, '\', '\\'), '%', '\%'), '_', '\_') || '%' ESCAPE '\'
+       OR a.content ILIKE '%' || replace(replace(replace(s.keyword, '\', '\\'), '%', '\%'), '_', '\_') || '%' ESCAPE '\')
 ORDER BY s.id, a.id
 `
 	rows, err := r.pool.Query(ctx, q, articleIDs)
