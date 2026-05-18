@@ -1,6 +1,16 @@
 "use client";
 
-import { useEffect, useState, use } from "react";
+// 文章详情页。
+//
+// 历史:之前用 /article/[id] 动态路由,但 Next.js `output: export` 静态导出模式下
+// 动态路由必须实现 generateStaticParams() 来枚举所有要预渲染的 id。我们的 article id
+// 来自 DB 运行时数据,无法在构建期枚举,所以走 query string `/article?id=123` 方案,
+// 让所有详情页共用同一个静态 HTML,客户端渲染时按 ?id= 拉数据。
+//
+// 副作用:useSearchParams 在 Next.js 静态导出下要求外层 <Suspense>,见 default export。
+
+import { Suspense, useEffect, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 
 type Article = {
@@ -92,14 +102,20 @@ function Sparkline({ points }: { points: HeatPoint[] }) {
   );
 }
 
-export default function ArticlePage({ params }: { params: Promise<{ id: string }> }) {
-  const { id } = use(params);
+function ArticleContent() {
+  const searchParams = useSearchParams();
+  const id = searchParams.get("id");
   const [article, setArticle] = useState<Article | null>(null);
   const [history, setHistory] = useState<HeatPoint[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    if (!id) {
+      setError("missing_id");
+      setLoading(false);
+      return;
+    }
     let cancelled = false;
     (async () => {
       try {
@@ -141,6 +157,18 @@ export default function ArticlePage({ params }: { params: Promise<{ id: string }
     return (
       <main className="mx-auto w-full max-w-3xl px-4 py-8">
         <div className="text-sm text-zinc-500">加载中…</div>
+      </main>
+    );
+  }
+
+  if (error === "missing_id") {
+    return (
+      <main className="mx-auto w-full max-w-3xl px-4 py-8">
+        <h1 className="mb-4 text-xl font-semibold">缺少文章 id</h1>
+        <p className="mb-4 text-sm text-zinc-500">URL 应为 /article?id=123 形式。</p>
+        <Link href="/" className="text-sm text-blue-600 hover:underline">
+          ← 返回首页
+        </Link>
       </main>
     );
   }
@@ -222,5 +250,21 @@ export default function ArticlePage({ params }: { params: Promise<{ id: string }
         </div>
       </article>
     </main>
+  );
+}
+
+// useSearchParams 在 Next.js 静态导出 + App Router 下要求外层 <Suspense>,
+// 否则编译期会报 "useSearchParams() should be wrapped in a suspense boundary"。
+export default function ArticlePage() {
+  return (
+    <Suspense
+      fallback={
+        <main className="mx-auto w-full max-w-3xl px-4 py-8">
+          <div className="text-sm text-zinc-500">加载中…</div>
+        </main>
+      }
+    >
+      <ArticleContent />
+    </Suspense>
   );
 }

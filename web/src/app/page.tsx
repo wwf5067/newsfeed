@@ -483,7 +483,7 @@ export default function Home() {
           });
           n.onclick = () => {
             window.focus();
-            window.location.href = `/article/${a.id}`;
+            window.location.href = `/article?id=${a.id}`;
           };
         } catch {
           // 通知失败(权限被撤销等)→ 静默
@@ -717,7 +717,7 @@ export default function Home() {
                 ↗
               </button>
               <Link
-                href={`/article/${a.id}`}
+                href={`/article?id=${a.id}`}
                 onClick={() => read.add(a.id)}
                 className="flex gap-3 pr-16"
               >
