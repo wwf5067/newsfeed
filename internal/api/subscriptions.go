@@ -35,7 +35,7 @@ func (h *Handler) ListSubscriptions(w http.ResponseWriter, r *http.Request) {
 }
 
 // AddSubscription POST /api/v1/subscriptions  body: {"keyword": "AI"}
-// 重复关键词返回 200(幂等),不报错。
+// 重复关键词返回 200 + created=false,便于前端给出"已订阅"提示。
 func (h *Handler) AddSubscription(w http.ResponseWriter, r *http.Request) {
 	if h.subscribeRepo == nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "subscribe disabled"})
@@ -57,13 +57,16 @@ func (h *Handler) AddSubscription(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "keyword too long"})
 		return
 	}
-	s, err := h.subscribeRepo.Add(r.Context(), keyword)
+	s, created, err := h.subscribeRepo.Add(r.Context(), keyword)
 	if err != nil {
 		h.logger.Error("add subscription", "keyword", keyword, "err", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
 		return
 	}
-	writeJSON(w, http.StatusOK, s)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"item":    s,
+		"created": created,
+	})
 }
 
 // DeleteSubscription DELETE /api/v1/subscriptions/{id}
