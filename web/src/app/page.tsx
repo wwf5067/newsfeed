@@ -109,7 +109,8 @@ function formatHeat(v: number): string {
 }
 
 // HeatBadge 统一热度展示样式:🔥 主热度 + 可选趋势(↑/↓ 差值)。
-// 趋势仅在 prev_value > 0 且与当前不同时显示,首次抓取的条目不展示趋势。
+// 趋势仅在 prev_value > 0 且与当前不同时显示,首次抓取的条目不展示趋势,
+// 改为渲染一个脉动的 NEW 徽章(prev_value === 0 视为首次上榜)。
 // 不同源的热度语义不一样:知乎是"讨论度",B 站是"播放量",量纲也不在同一级。
 // 用不同图标 + tooltip 让用户一眼看出指标类型,避免拿"100 万播放"和"100 万热度"
 // 做心理换算。新增源时在此追加一项即可,默认走 fire 配置。
@@ -133,32 +134,44 @@ function HeatBadge({
   if (!main) return null;
 
   const meta = HEAT_ICONS[sourceKey] ?? { icon: "🔥", label: "热度" };
-  const hasTrend = prevValue > 0 && value > 0 && value !== prevValue;
+  const isNew = prevValue === 0 && value > 0;
+  // 首次上榜不显示趋势(没有比较基准),改用 NEW 徽章表达。
+  const hasTrend = !isNew && prevValue > 0 && value > 0 && value !== prevValue;
   const diff = value - prevValue;
   const up = diff > 0;
   const trendText = hasTrend ? formatHeat(Math.abs(diff)) : "";
 
   return (
-    <span
-      className="inline-flex shrink-0 items-center gap-1 rounded-full bg-red-50 px-2 py-0.5 text-xs font-medium tabular-nums text-red-600 dark:bg-red-950 dark:text-red-400"
-      title={meta.label}
-    >
-      <span aria-hidden="true">{meta.icon}</span>
-      <span>{main}</span>
-      {hasTrend && (
+    <>
+      {isNew && (
         <span
-          className={
-            up
-              ? "text-emerald-600 dark:text-emerald-400"
-              : "text-zinc-500 dark:text-zinc-400"
-          }
-          title={`${meta.label}相比上次${up ? "上升" : "下降"} ${trendText}`}
+          className="inline-flex shrink-0 animate-pulse items-center rounded-full bg-red-600 px-1.5 py-0.5 text-[10px] font-bold leading-none text-white shadow-sm"
+          title="首次上榜"
         >
-          {up ? "↑" : "↓"}
-          {trendText}
+          NEW
         </span>
       )}
-    </span>
+      <span
+        className="inline-flex shrink-0 items-center gap-1 rounded-full bg-red-50 px-2 py-0.5 text-xs font-medium tabular-nums text-red-600 dark:bg-red-950 dark:text-red-400"
+        title={meta.label}
+      >
+        <span aria-hidden="true">{meta.icon}</span>
+        <span>{main}</span>
+        {hasTrend && (
+          <span
+            className={
+              up
+                ? "text-emerald-600 dark:text-emerald-400"
+                : "text-zinc-500 dark:text-zinc-400"
+            }
+            title={`${meta.label}相比上次${up ? "上升" : "下降"} ${trendText}`}
+          >
+            {up ? "↑" : "↓"}
+            {trendText}
+          </span>
+        )}
+      </span>
+    </>
   );
 }
 
