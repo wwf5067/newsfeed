@@ -11,6 +11,7 @@ import (
 
 	"github.com/robfig/cron/v3"
 
+	"github.com/wwf5067/newsfeed/internal/crawler/digest"
 	"github.com/wwf5067/newsfeed/internal/crawler/quotes"
 )
 
@@ -37,6 +38,10 @@ type Runner struct {
 	// 每日名言 job(可选,nil 时不启用)
 	announcementsRepo *AnnouncementsRepository
 	quotesSchedule    string // cron 表达式,空字符串则不注册
+
+	// 每日精选邮件 job(可选,digest=nil 时不启用)
+	digest         *digest.Digest
+	digestSchedule string
 }
 
 func NewRunner(
@@ -45,6 +50,8 @@ func NewRunner(
 	announcementsRepo *AnnouncementsRepository,
 	retentionDays int,
 	quotesSchedule string,
+	digestJob *digest.Digest,
+	digestSchedule string,
 ) *Runner {
 	return &Runner{
 		logger:            logger,
@@ -54,6 +61,8 @@ func NewRunner(
 		retentionDays:     retentionDays,
 		announcementsRepo: announcementsRepo,
 		quotesSchedule:    quotesSchedule,
+		digest:            digestJob,
+		digestSchedule:    digestSchedule,
 	}
 }
 
@@ -111,6 +120,16 @@ func (r *Runner) Start() {
 			r.logger.Error("register quotes job", "err", err)
 		} else {
 			r.logger.Info("quotes job registered", "schedule", r.quotesSchedule)
+		}
+	}
+
+	// 注册每日精选邮件 job(配置完整才启用)
+	if r.digest != nil && r.digestSchedule != "" {
+		_, err := r.cron.AddFunc(r.digestSchedule, r.runDigestJob)
+		if err != nil {
+			r.logger.Error("register digest job", "err", err)
+		} else {
+			r.logger.Info("digest job registered", "schedule", r.digestSchedule)
 		}
 	}
 
@@ -236,6 +255,13 @@ func (r *Runner) runQuotesJob() {
 			log.Info("quote inserted", "id", id)
 		}
 	}
+}
+
+// runDigestJob 触发一次每日精选邮件发送。失败仅记日志,不影响下次 cron。
+func (r *Runner) runDigestJob() {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	r.digest.Run(ctx)
 }
 
 // getBackoffUntil 读取某 Source 当前的退避截止时间。

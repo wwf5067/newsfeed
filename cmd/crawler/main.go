@@ -11,8 +11,10 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/wwf5067/newsfeed/internal/api"
 	"github.com/wwf5067/newsfeed/internal/config"
 	"github.com/wwf5067/newsfeed/internal/crawler"
+	"github.com/wwf5067/newsfeed/internal/crawler/digest"
 	"github.com/wwf5067/newsfeed/internal/crawler/sources"
 	"github.com/wwf5067/newsfeed/internal/logger"
 	"github.com/wwf5067/newsfeed/internal/storage"
@@ -37,7 +39,27 @@ func main() {
 
 	repo := crawler.NewRepository(pool)
 	announcementsRepo := crawler.NewAnnouncementsRepository(pool)
-	runner := crawler.NewRunner(log, repo, announcementsRepo, cfg.RetentionDays, cfg.QuotesSchedule)
+
+	// 每日精选邮件:跨包用 api.Repository 读 articles。
+	// SMTP 配置不全时 digestJob = nil,runner 会自动跳过注册。
+	apiRepo := api.NewRepository(pool)
+	var digestJob *digest.Digest
+	if cfg.SMTPHost != "" && cfg.DigestTo != "" {
+		digestJob = digest.New(log, apiRepo, digest.SMTPConfig{
+			Host:    cfg.SMTPHost,
+			Port:    cfg.SMTPPort,
+			User:    cfg.SMTPUser,
+			Pass:    cfg.SMTPPass,
+			From:    cfg.SMTPFrom,
+			To:      cfg.DigestTo,
+			SiteURL: cfg.SiteURL,
+		})
+		log.Info("digest job configured", "to", cfg.DigestTo, "schedule", cfg.DigestSchedule)
+	} else {
+		log.Warn("digest job skipped: SMTP_HOST or DIGEST_TO empty")
+	}
+
+	runner := crawler.NewRunner(log, repo, announcementsRepo, cfg.RetentionDays, cfg.QuotesSchedule, digestJob, cfg.DigestSchedule)
 
 	// 显式注册数据源。新增源 = 在这里加一行。
 	// 没配置必需凭据的源会被跳过,不影响其它源运行。

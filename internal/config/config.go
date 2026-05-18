@@ -37,6 +37,17 @@ type Config struct {
 	// 每日名言 job:从内置库随机选 2 条以 announcements 形式发布
 	QuotesSchedule string // cron 表达式(支持秒),默认每天 8:00
 
+	// 每日精选邮件 job:把 top10 热门发到指定邮箱。
+	// SMTPHost 空时该 job 不注册,crawler 仍正常启动。
+	DigestSchedule string // cron 表达式(支持秒),默认每天 8:00
+	SMTPHost       string // 如 smtp.qq.com
+	SMTPPort       int    // 默认 465(SMTPS)
+	SMTPUser       string
+	SMTPPass       string // QQ/163 邮箱注意用"授权码"而不是登录密码
+	SMTPFrom       string // 发件人地址,通常等于 SMTPUser
+	DigestTo       string // 收件人(单值)
+	SiteURL        string // 邮件正文里拼绝对链接用,如 https://newsfeed.example.com
+
 	// 调试开关:启动时立即执行一次所有源(不等 cron 触发)
 	RunOnStart bool
 
@@ -59,6 +70,14 @@ func Load() (*Config, error) {
 		BilibiliEnabled:  strings.EqualFold(os.Getenv("BILIBILI_ENABLED"), "true"),
 		BilibiliSchedule: getEnv("BILIBILI_SCHEDULE", "0 */30 * * * *"),
 		QuotesSchedule:   getEnv("QUOTES_SCHEDULE", "0 0 8 * * *"),
+		DigestSchedule:   getEnv("DIGEST_SCHEDULE", "0 0 8 * * *"),
+		SMTPHost:         os.Getenv("SMTP_HOST"),
+		SMTPPort:         getEnvInt("SMTP_PORT", 465),
+		SMTPUser:         os.Getenv("SMTP_USER"),
+		SMTPPass:         os.Getenv("SMTP_PASS"),
+		SMTPFrom:         getEnv("SMTP_FROM", os.Getenv("SMTP_USER")),
+		DigestTo:         os.Getenv("DIGEST_TO"),
+		SiteURL:          getEnv("SITE_URL", "http://localhost:3000"),
 		RunOnStart:       strings.EqualFold(os.Getenv("RUN_ON_START"), "true"),
 		RetentionDays:    getEnvInt("RETENTION_DAYS", 30),
 	}
