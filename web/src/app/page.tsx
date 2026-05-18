@@ -37,14 +37,29 @@ type Announcement = {
 const POLL_INTERVAL_MS = 5 * 60 * 1000;
 // 公告刷新间隔:10 分钟(变更频率远低于文章)
 const ANNOUNCEMENT_POLL_MS = 10 * 60 * 1000;
+// 搜索框防抖:300ms
+const SEARCH_DEBOUNCE_MS = 300;
 // localStorage 键:已被用户关闭、不再展示的公告 id 列表
 const DISMISSED_KEY = "dismissed_announcements";
+// localStorage 键:已读 / 收藏的文章 id
+const READ_KEY = "read_ids";
+const STARRED_KEY = "starred_ids";
+
+// 源 tab 配置。新增源时在此追加一项。
+const SOURCES: { key: string; label: string }[] = [
+  { key: "", label: "全部" },
+  { key: "zhihu_hot", label: "知乎" },
+  { key: "bilibili_popular", label: "B站" },
+];
 
 // 静态导出时不能用 SSR,所以走 client fetch。
 // 开发环境由 next.config rewrites 代理到 localhost:8080,
 // 生产环境由 Nginx 反代,前端永远访问相对路径 /api/v1/*。
-async function fetchArticles(): Promise<Article[]> {
-  const res = await fetch("/api/v1/articles?limit=50", { cache: "no-store" });
+async function fetchArticles(source: string, q: string): Promise<Article[]> {
+  const params = new URLSearchParams({ limit: "50" });
+  if (source) params.set("source", source);
+  if (q) params.set("q", q);
+  const res = await fetch(`/api/v1/articles?${params.toString()}`, { cache: "no-store" });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const data: ListResp = await res.json();
   return data.items ?? [];
@@ -126,6 +141,64 @@ function HeatBadge({
       )}
     </span>
   );
+}
+
+// useIdSet 把 localStorage 里的 number[] 暴露成 Set,提供 has/add/toggle。
+// 已读、收藏共用同一份逻辑,key 不同即可。
+function useIdSet(storageKey: string) {
+  const [ids, setIds] = useState<Set<number>>(new Set());
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(storageKey);
+      if (!raw) return;
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        setIds(new Set(parsed.filter((x) => typeof x === "number")));
+      }
+    } catch {
+      // 隐私模式 / 非法数据 → 静默忽略
+    }
+  }, [storageKey]);
+
+  const persist = useCallback(
+    (next: Set<number>) => {
+      try {
+        localStorage.setItem(storageKey, JSON.stringify([...next]));
+      } catch {
+        // localStorage 写失败也无视,内存态仍可用
+      }
+    },
+    [storageKey]
+  );
+
+  const add = useCallback(
+    (id: number) => {
+      setIds((prev) => {
+        if (prev.has(id)) return prev;
+        const next = new Set(prev);
+        next.add(id);
+        persist(next);
+        return next;
+      });
+    },
+    [persist]
+  );
+
+  const toggle = useCallback(
+    (id: number) => {
+      setIds((prev) => {
+        const next = new Set(prev);
+        if (next.has(id)) next.delete(id);
+        else next.add(id);
+        persist(next);
+        return next;
+      });
+    },
+    [persist]
+  );
+
+  return { ids, add, toggle };
 }
 
 // level → Tailwind class 映射。深色模式自动适配。
@@ -233,9 +306,24 @@ export default function Home() {
   const [, setTick] = useState(0); // 用于触发 formatRelativeTime 重渲染
   const initialLoad = useRef(true);
 
+  // 当前选中的源 + 搜索词。debouncedQ 用于发请求,query 用于输入框受控。
+  const [source, setSource] = useState("");
+  const [query, setQuery] = useState("");
+  const [debouncedQ, setDebouncedQ] = useState("");
+
+  // 已读 / 收藏 id(localStorage 持久化)
+  const read = useIdSet(READ_KEY);
+  const starred = useIdSet(STARRED_KEY);
+
+  // 搜索框防抖
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedQ(query.trim()), SEARCH_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+  }, [query]);
+
   const refresh = useCallback(async () => {
     try {
-      const items = await fetchArticles();
+      const items = await fetchArticles(source, debouncedQ);
       setArticles(items);
       setLastUpdated(new Date());
       setError(null);
@@ -250,7 +338,7 @@ export default function Home() {
         initialLoad.current = false;
       }
     }
-  }, []);
+  }, [source, debouncedQ]);
 
   useEffect(() => {
     refresh();
@@ -279,6 +367,38 @@ export default function Home() {
         </div>
       </header>
 
+      {/* 源 tab + 搜索框 */}
+      <div className="mb-4 flex flex-wrap items-center gap-2">
+        <div className="flex gap-1 rounded-md border border-zinc-200 bg-white p-0.5 dark:border-zinc-800 dark:bg-zinc-900">
+          {SOURCES.map((s) => {
+            const active = source === s.key;
+            return (
+              <button
+                key={s.key || "all"}
+                type="button"
+                onClick={() => setSource(s.key)}
+                className={
+                  "rounded px-3 py-1 text-sm transition " +
+                  (active
+                    ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
+                    : "text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800")
+                }
+              >
+                {s.label}
+              </button>
+            );
+          })}
+        </div>
+        <input
+          type="search"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="搜索标题或内容…"
+          aria-label="搜索"
+          className="ml-auto min-w-0 flex-1 rounded-md border border-zinc-200 bg-white px-3 py-1 text-sm outline-none placeholder:text-zinc-400 focus:border-zinc-400 dark:border-zinc-800 dark:bg-zinc-900 dark:focus:border-zinc-600"
+        />
+      </div>
+
       {error && (
         <div className="mb-6 rounded-md border border-red-300 bg-red-50 p-4 text-sm text-red-700 dark:border-red-800 dark:bg-red-950 dark:text-red-300">
           加载失败: {error}
@@ -288,47 +408,89 @@ export default function Home() {
         </div>
       )}
 
+      {!loading && articles.length === 0 && !error && (
+        <div className="rounded-md border border-dashed border-zinc-300 p-8 text-center text-sm text-zinc-500 dark:border-zinc-700">
+          没有匹配的内容
+        </div>
+      )}
+
       <ul className="space-y-3">
-        {articles.map((a, i) => (
-          <li
-            key={a.id}
-            className="rounded-lg border border-zinc-200 bg-white p-4 shadow-sm transition hover:shadow-md dark:border-zinc-800 dark:bg-zinc-900"
-          >
-            <a
-              href={a.url}
-              target="_blank"
-              rel="noreferrer"
-              className="flex gap-3"
+        {articles.map((a, i) => {
+          const isRead = read.ids.has(a.id);
+          const isStarred = starred.ids.has(a.id);
+          return (
+            <li
+              key={a.id}
+              className={
+                "relative rounded-lg border bg-white p-4 shadow-sm transition hover:shadow-md dark:bg-zinc-900 " +
+                (isStarred
+                  ? "border-zinc-200 border-l-4 border-l-amber-400 dark:border-zinc-800 dark:border-l-amber-500"
+                  : "border-zinc-200 dark:border-zinc-800") +
+                (isRead ? " opacity-60" : "")
+              }
             >
-              <span className="shrink-0 select-none font-mono text-sm text-zinc-400 tabular-nums">
-                {String(i + 1).padStart(2, "0")}
-              </span>
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-2">
-                  <h2 className="text-base font-medium leading-snug text-zinc-900 group-hover:underline dark:text-zinc-100">
-                    {a.title}
-                  </h2>
-                  {(a.heat || a.heat_value > 0) && (
-                    <HeatBadge
-                      heat={a.heat}
-                      value={a.heat_value}
-                      prevValue={a.prev_heat_value}
-                    />
+              {/* 收藏按钮:绝对定位右上角,不影响主链接命中 */}
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  starred.toggle(a.id);
+                }}
+                aria-label={isStarred ? "取消收藏" : "收藏"}
+                className={
+                  "absolute right-3 top-3 rounded p-1 text-base transition " +
+                  (isStarred
+                    ? "text-amber-500"
+                    : "text-zinc-300 hover:text-amber-500 dark:text-zinc-600")
+                }
+              >
+                {isStarred ? "★" : "☆"}
+              </button>
+              <a
+                href={a.url}
+                target="_blank"
+                rel="noreferrer"
+                onClick={() => read.add(a.id)}
+                className="flex gap-3 pr-8"
+              >
+                <span className="shrink-0 select-none font-mono text-sm text-zinc-400 tabular-nums">
+                  {String(i + 1).padStart(2, "0")}
+                </span>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2">
+                    <h2
+                      className={
+                        "text-base font-medium leading-snug group-hover:underline " +
+                        (isRead
+                          ? "text-zinc-500 dark:text-zinc-500"
+                          : "text-zinc-900 dark:text-zinc-100")
+                      }
+                    >
+                      {a.title}
+                    </h2>
+                    {(a.heat || a.heat_value > 0) && (
+                      <HeatBadge
+                        heat={a.heat}
+                        value={a.heat_value}
+                        prevValue={a.prev_heat_value}
+                      />
+                    )}
+                  </div>
+                  {a.content && (
+                    <p className="mt-1 line-clamp-2 text-sm text-zinc-600 dark:text-zinc-400">
+                      {a.content}
+                    </p>
                   )}
+                  <div className="mt-2 flex gap-3 text-xs text-zinc-500">
+                    <span>{a.source_key}</span>
+                    <span>{formatTime(a.published_at)}</span>
+                  </div>
                 </div>
-                {a.content && (
-                  <p className="mt-1 line-clamp-2 text-sm text-zinc-600 dark:text-zinc-400">
-                    {a.content}
-                  </p>
-                )}
-                <div className="mt-2 flex gap-3 text-xs text-zinc-500">
-                  <span>{a.source_key}</span>
-                  <span>{formatTime(a.published_at)}</span>
-                </div>
-              </div>
-            </a>
-          </li>
-        ))}
+              </a>
+            </li>
+          );
+        })}
       </ul>
     </main>
   );
