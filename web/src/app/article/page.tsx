@@ -56,8 +56,8 @@ async function addSubscription(term: string): Promise<{ created?: boolean }> {
   return res.json();
 }
 
-// Sparkline 用纯 SVG 画热度时序。30 行代码,不引图表库。
-// width/height 固定,viewBox 让线条按数据范围自适应。
+// Sparkline 用纯 SVG 画热度时序。不引图表库。
+// 数据点 ≥ 2 时画曲线 + 标注峰值/谷值;< 2 显示降级提示。
 function Sparkline({ points }: { points: HeatPoint[] }) {
   if (points.length < 2) {
     return (
@@ -74,10 +74,16 @@ function Sparkline({ points }: { points: HeatPoint[] }) {
   const max = Math.max(...values);
   const range = max - min || 1; // 防除零
   const stepX = (W - PAD * 2) / (points.length - 1);
+  // 找峰值/谷值索引(取首次出现位置,避免常数序列时全是同一个点重复)
+  const maxIdx = values.indexOf(max);
+  const minIdx = values.indexOf(min);
+  const xy = (i: number, v: number) => ({
+    x: PAD + i * stepX,
+    y: H - PAD - ((v - min) / range) * (H - PAD * 2),
+  });
   const path = points
     .map((p, i) => {
-      const x = PAD + i * stepX;
-      const y = H - PAD - ((p.heat_value - min) / range) * (H - PAD * 2);
+      const { x, y } = xy(i, p.heat_value);
       return `${i === 0 ? "M" : "L"}${x.toFixed(1)},${y.toFixed(1)}`;
     })
     .join(" ");
@@ -85,6 +91,10 @@ function Sparkline({ points }: { points: HeatPoint[] }) {
   const first = points[0];
   const trend = last.heat_value - first.heat_value;
   const up = trend > 0;
+  // 标注点。max != min 时各标一个;相等(常数序列)就不标,避免重影
+  const showExtremes = max !== min;
+  const maxPt = xy(maxIdx, max);
+  const minPt = xy(minIdx, min);
   return (
     <div>
       <svg
@@ -100,6 +110,12 @@ function Sparkline({ points }: { points: HeatPoint[] }) {
           strokeWidth="1.5"
           vectorEffect="non-scaling-stroke"
         />
+        {showExtremes && (
+          <>
+            <circle cx={maxPt.x} cy={maxPt.y} r={2.5} fill="#ef4444" vectorEffect="non-scaling-stroke" />
+            <circle cx={minPt.x} cy={minPt.y} r={2.5} fill="#3b82f6" vectorEffect="non-scaling-stroke" />
+          </>
+        )}
       </svg>
       <div className="mt-1 flex justify-between text-xs text-zinc-500">
         <span>{new Date(first.captured_at).toLocaleString("zh-CN", { hour12: false })}</span>
@@ -108,6 +124,18 @@ function Sparkline({ points }: { points: HeatPoint[] }) {
         </span>
         <span>{new Date(last.captured_at).toLocaleString("zh-CN", { hour12: false })}</span>
       </div>
+      {showExtremes && (
+        <div className="mt-1 flex justify-center gap-4 text-xs">
+          <span className="text-red-500">
+            <span className="inline-block h-1.5 w-1.5 rounded-full bg-red-500 align-middle" />{" "}
+            峰值 {max.toLocaleString()}
+          </span>
+          <span className="text-blue-500">
+            <span className="inline-block h-1.5 w-1.5 rounded-full bg-blue-500 align-middle" />{" "}
+            谷值 {min.toLocaleString()}
+          </span>
+        </div>
+      )}
     </div>
   );
 }
