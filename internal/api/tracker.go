@@ -77,8 +77,9 @@ type trackerCandidate struct {
 }
 
 type trackerLexiconEntry struct {
-	Label   string
-	Aliases []string
+	Label    string
+	Aliases  []string
+	Category string // 元数据,前端可据此分类筛选(company/person/ip/event/place);空字符串表示未归类
 }
 
 type trackerLexiconAlias struct {
