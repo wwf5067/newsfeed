@@ -28,6 +28,7 @@ func NewRouter(h *Handler) http.Handler {
 		r.Get("/trackers/related", h.ListTrackerRelated)
 		r.Get("/articles/{id}", h.GetArticleByID)
 		r.Get("/articles/{id}/heat-history", h.GetHeatHistory)
+		r.Get("/articles/{id}/keywords", h.GetArticleKeywords)
 		r.Get("/announcements", h.ListAnnouncements)
 		r.Get("/feed.xml", h.FeedRSS)
 

@@ -117,6 +117,7 @@ function ArticleContent() {
   const id = searchParams.get("id");
   const [article, setArticle] = useState<Article | null>(null);
   const [history, setHistory] = useState<HeatPoint[]>([]);
+  const [keywords, setKeywords] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -131,9 +132,10 @@ function ArticleContent() {
     let cancelled = false;
     (async () => {
       try {
-        const [aRes, hRes] = await Promise.all([
+        const [aRes, hRes, kRes] = await Promise.all([
           fetch(`/api/v1/articles/${id}`, { cache: "no-store" }),
           fetch(`/api/v1/articles/${id}/heat-history?limit=48`, { cache: "no-store" }),
+          fetch(`/api/v1/articles/${id}/keywords`, { cache: "no-store" }),
         ]);
         if (aRes.status === 404) {
           if (!cancelled) setError("not_found");
@@ -142,10 +144,13 @@ function ArticleContent() {
         if (!aRes.ok) throw new Error(`HTTP ${aRes.status}`);
         const data: Article = await aRes.json();
         if (!cancelled) setArticle(data);
-        // heat history 失败不阻塞文章展示
         if (hRes.ok) {
           const hData: { items: HeatPoint[] } = await hRes.json();
           if (!cancelled) setHistory(hData.items ?? []);
+        }
+        if (kRes.ok) {
+          const kData: { keywords: string[] } = await kRes.json();
+          if (!cancelled) setKeywords(kData.keywords ?? []);
         }
       } catch (e) {
         if (!cancelled) setError(String(e));
@@ -212,16 +217,16 @@ function ArticleContent() {
 
   const sourceLabel = SOURCE_LABELS[article.source_key] ?? article.source_key;
 
-  async function handleSubscribeTitle() {
+  async function handleSubscribeKeyword(kw: string) {
     if (submitting) return;
     setSubmitting(true);
     setSubscribeMsg(null);
     try {
-      const result = await addSubscription(article!.title);
+      const result = await addSubscription(kw);
       if (result.created === false) {
-        setSubscribeMsg("该标题已经在订阅列表里");
+        setSubscribeMsg(`"${kw}" 已经在订阅列表里`);
       } else {
-        setSubscribeMsg("已按当前标题加入订阅");
+        setSubscribeMsg(`已订阅 "${kw}"，有新内容时会邮件通知`);
       }
     } catch (e) {
       setSubscribeMsg(`订阅失败: ${String(e)}`);
@@ -255,22 +260,33 @@ function ArticleContent() {
           <span>· {formatTime(article.published_at)}</span>
         </div>
 
-        <div className="mb-6 flex flex-wrap gap-2">
-          <button
-            type="button"
-            onClick={handleSubscribeTitle}
-            disabled={submitting}
-            className="rounded-full bg-zinc-900 px-3 py-1 text-xs text-white transition hover:bg-zinc-700 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
-          >
-            {submitting ? "订阅中…" : "订阅这个标题"}
-          </button>
-          <Link
-            href={`/tracker?term=${encodeURIComponent(article.title)}&window=24`}
-            className="rounded-full bg-amber-100 px-3 py-1 text-xs text-amber-700 transition hover:bg-amber-200 dark:bg-amber-950 dark:text-amber-300 dark:hover:bg-amber-900"
-          >
-            查看标题时间线
-          </Link>
-        </div>
+        {/* 关键词操作区:订阅 + 时间线 */}
+        {keywords.length > 0 && (
+          <div className="mb-6">
+            <p className="mb-2 text-xs text-zinc-500">相关关键词</p>
+            <div className="flex flex-wrap gap-2">
+              {keywords.map((kw) => (
+                <div key={kw} className="inline-flex items-center gap-1">
+                  <Link
+                    href={`/tracker?term=${encodeURIComponent(kw)}&window=24`}
+                    className="rounded-full bg-zinc-100 px-2.5 py-1 text-xs text-zinc-700 transition hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
+                  >
+                    {kw}
+                  </Link>
+                  <button
+                    type="button"
+                    onClick={() => handleSubscribeKeyword(kw)}
+                    disabled={submitting}
+                    className="rounded-full bg-amber-50 px-2 py-1 text-[11px] text-amber-700 transition hover:bg-amber-100 disabled:opacity-50 dark:bg-amber-950 dark:text-amber-300 dark:hover:bg-amber-900"
+                    title={`订阅 "${kw}"`}
+                  >
+                    +订阅
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         {subscribeMsg && (
           <div className="mb-6 rounded-md border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm text-zinc-600 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-300">
