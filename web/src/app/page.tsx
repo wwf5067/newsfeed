@@ -480,8 +480,8 @@ export default function Home() {
     return () => clearInterval(timer);
   }, []);
 
-  // 同源 Top 10 id 集合:每个 source_key 内部按 heat_value 降序前 10 名。
-  // 用 Set<id> 让卡片渲染时 O(1) 判断。每次 articles 变才重算。
+  // 同源 Top 10 排名映射:每个 source_key 内部按 heat_value 降序前 10 名。
+  // 用 Map<id, rank> 让卡片渲染时 O(1) 判断并获取排名序号。每次 articles 变才重算。
   const topIdsBySource = useMemo(() => {
     const bySource = new Map<string, Article[]>();
     for (const a of articles) {
@@ -489,26 +489,26 @@ export default function Home() {
       list.push(a);
       bySource.set(a.source_key, list);
     }
-    const top = new Set<number>();
+    const top = new Map<number, number>();
     for (const list of bySource.values()) {
       list
         .filter((a) => a.heat_value > 0)
         .sort((x, y) => y.heat_value - x.heat_value)
         .slice(0, 10)
-        .forEach((a) => top.add(a.id));
+        .forEach((a, idx) => top.set(a.id, idx + 1));
     }
     return top;
   }, [articles]);
 
   // 飙升判定:命中以下任一即认为飙升。
   //  1) 相比上一次抓取(30 分钟前) heat 增幅 >= 10%
-  //  2) 首次上榜(prev_heat_value === 0 且当前 heat_value > 0)——能进我们抓的源
-  //     就已经在它的热榜/热门里了,所以"首次出现"本身就是一种突然飙升
+  //  2) 首次上榜(prev_heat_value === 0 且当前 heat_value > 0)
+  //     **且**当前热度进入该源 top10 —— 否则只是冷门内容刚被抓到,不是真"飙升"
   // NEW 徽章和 🚀 图标会重叠显示(语义独立:NEW 强调"刚出现",🚀 强调"涨势"),
-  // 视觉上能让用户一眼分清"老朋友突然涨"与"新面孔上榜"。
-  function isSurging(a: Article): boolean {
+  // 视觉上能让用户一眼分清"老朋友突然涨"与"新面孔进 top10"。
+  function isSurging(a: Article, topIds: Map<number, number>): boolean {
     if (a.heat_value <= 0) return false;
-    if (a.prev_heat_value <= 0) return true; // 首次上榜
+    if (a.prev_heat_value <= 0) return topIds.has(a.id); // 首次上榜:必须在 top10
     return (a.heat_value - a.prev_heat_value) / a.prev_heat_value >= 0.1;
   }
 
@@ -702,13 +702,15 @@ export default function Home() {
               <Link
                 href={`/article?id=${a.id}`}
                 onClick={() => read.add(a.id)}
-                className="flex gap-3 pr-16"
+                className="flex gap-3"
               >
                 <span className="shrink-0 select-none font-mono text-sm text-zinc-400 tabular-nums">
                   {String(i + 1).padStart(2, "0")}
                 </span>
                 <div className="min-w-0 flex-1">
-                  <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                  {/* 标题行右边留 pr-16 给绝对定位的 ★/↗ 按钮腾位置;
+                      摘要和元信息行不需要避让,可以贴到卡片右边沿 */}
+                  <div className="flex flex-wrap items-center gap-x-2 gap-y-1 pr-16">
                     <h2
                       className={
                         "text-base font-medium leading-snug hover:underline " +
@@ -727,21 +729,21 @@ export default function Home() {
                         prevValue={a.prev_heat_value}
                       />
                     )}
-                    {/* 同源 Top 10:在当前列表里、按 heat_value 降序排前 10 名 */}
+                    {/* 同源 Top 10:在当前列表里、按 heat_value 降序排前 10 名,显示排名序号 */}
                     {topIdsBySource.has(a.id) && (
                       <span
-                        className="inline-flex shrink-0 items-center rounded-full bg-amber-100 px-1.5 py-0.5 text-xs font-medium text-amber-700 dark:bg-amber-950 dark:text-amber-400"
-                        title="同源热度 / 播放量 Top 10"
-                        aria-label="同源 Top 10"
+                        className="inline-flex shrink-0 items-center gap-0.5 rounded-full bg-amber-100 px-1.5 py-0.5 text-xs font-medium text-amber-700 dark:bg-amber-950 dark:text-amber-400"
+                        title={`同源热度 / 播放量 Top ${topIdsBySource.get(a.id)}`}
+                        aria-label={`同源 Top ${topIdsBySource.get(a.id)}`}
                       >
-                        🏆
+                        🏆<span className="font-semibold tabular-nums">{topIdsBySource.get(a.id)}</span>
                       </span>
                     )}
-                    {/* 飙升:相比 30 分钟前热度增幅 ≥ 30% */}
-                    {isSurging(a) && (
+                    {/* 飙升:相比 30 分钟前热度增幅 ≥ 10%,或首次上榜且进 top10 */}
+                    {isSurging(a, topIdsBySource) && (
                       <span
                         className="inline-flex shrink-0 items-center rounded-full bg-orange-100 px-1.5 py-0.5 text-xs font-medium text-orange-700 dark:bg-orange-950 dark:text-orange-400"
-                        title="近 30 分钟热度飙升(增幅 ≥ 30%)"
+                        title="近 30 分钟热度飙升(增幅 ≥ 10%,或首次上榜进 Top10)"
                         aria-label="飙升"
                       >
                         🚀
@@ -749,7 +751,7 @@ export default function Home() {
                     )}
                   </div>
                   {a.content && (
-                    <p className="mt-1 line-clamp-2 text-sm text-zinc-600 dark:text-zinc-400">
+                    <p className="mt-1.5 line-clamp-4 text-[13px] leading-relaxed text-zinc-600 dark:text-zinc-400">
                       {a.content}
                     </p>
                   )}
