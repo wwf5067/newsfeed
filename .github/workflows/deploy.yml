@@ -145,15 +145,21 @@ jobs:
           scp -P ${{ secrets.SSH_PORT || 22 }} bundle.tar.gz \
             ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:/tmp/newsfeed-bundle.tar.gz
 
-      - name: Deploy
+      - name: Render remote deploy script
         env:
           IMAGE_TAG: ${{ needs.build-images.outputs.image_tag }}
           OWNER: ${{ steps.owner.outputs.lc }}
         run: |
-          ssh -p ${{ secrets.SSH_PORT || 22 }} \
-            ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} \
-            "IMAGE_TAG=${IMAGE_TAG} OWNER=${OWNER} bash -s" <<'REMOTE'
+          # 把 deploy 脚本写成本地文件,然后 scp 上去执行。
+          # 之前用 `ssh <<'REMOTE'` heredoc 通过 stdin 传脚本,Actions runner
+          # 在 stdin EOF 后偶尔会过早 disconnect(实际事故:5/18 那次 migrate
+          # 跑完瞬间 runner 主动断开,up -d 还没机会执行,但 step 报 success)。
+          cat > deploy-remote.sh <<'EOS'
+          #!/usr/bin/env bash
           set -euo pipefail
+
+          : "${IMAGE_TAG:?IMAGE_TAG required}"
+          : "${OWNER:?OWNER required}"
 
           APP_DIR=/opt/newsfeed
           sudo mkdir -p "$APP_DIR"
@@ -181,21 +187,17 @@ jobs:
           sed -i "s|^API_IMAGE=.*|API_IMAGE=ghcr.io/${OWNER}/newsfeed-api:${IMAGE_TAG}|" .env
           sed -i "s|^CRAWLER_IMAGE=.*|CRAWLER_IMAGE=ghcr.io/${OWNER}/newsfeed-crawler:${IMAGE_TAG}|" .env
 
-          # 登录 GHCR(私有镜像才需要;public 可省略,但保留无害)
-          # 这里假设镜像是 public,若改为 private 需要在 server 上提前 docker login
-
-          docker compose -f docker-compose.prod.yml pull
-          # 应用新迁移(失败则部署失败,避免出现 "表不存在" 这种隐性问题)
-          docker compose -f docker-compose.prod.yml --profile migrate run --rm migrate
-          docker compose -f docker-compose.prod.yml up -d
-          # web-dist 目录被 deploy 步骤 rm -rf 重建过,inode 变了,
-          # 已运行的 nginx 容器仍持有旧 inode 挂载(幽灵挂载,看到空目录)。
-          # 镜像没变时 `up -d` 不会重启 nginx,这里强制重启刷新 bind mount。
-          docker compose -f docker-compose.prod.yml restart nginx
+          # plain 进度避免 ANSI 控制字符把 Actions runner 的输出 buffer 搞崩
+          docker compose -f docker-compose.prod.yml --progress plain pull
+          # 迁移(失败则整体退出,避免 "表不存在" 这种隐性问题)
+          docker compose -f docker-compose.prod.yml --progress plain --profile migrate run --rm migrate
+          docker compose -f docker-compose.prod.yml --progress plain up -d
+          # web-dist 目录被上面 rm -rf 重建过,inode 变了。镜像没变时 `up -d`
+          # 不会重启 nginx,旧容器仍持有失效挂载(幽灵挂载),需手动 restart。
+          docker compose -f docker-compose.prod.yml --progress plain restart nginx
           docker compose -f docker-compose.prod.yml ps
 
           # ---- 远端自检:确认容器真的换上了新镜像 + 服务能响应 ----
-          # 没这个的话,SSH 中途 broken pipe / 镜像 pull 失败时,Actions 会假装 success。
           echo "==> Verifying deployment on host..."
 
           EXPECTED_API="ghcr.io/${OWNER}/newsfeed-api:${IMAGE_TAG}"
@@ -228,11 +230,30 @@ jobs:
             sleep 2
           done
 
-          # 顺便验证 API 路由
           api_code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 3 "http://127.0.0.1/api/v1/articles?limit=1" || echo "000")
           if [ "$api_code" != "200" ]; then
             echo "ERROR: /api/v1/articles returned HTTP $api_code" >&2
             exit 1
           fi
           echo "==> Deployment verified: images=${IMAGE_TAG}, http=200, api=200"
-          REMOTE
+          EOS
+          chmod +x deploy-remote.sh
+
+      - name: Upload deploy script
+        run: |
+          scp -P ${{ secrets.SSH_PORT || 22 }} deploy-remote.sh \
+            ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:/tmp/newsfeed-deploy.sh
+
+      - name: Run deploy script on host
+        env:
+          IMAGE_TAG: ${{ needs.build-images.outputs.image_tag }}
+          OWNER: ${{ steps.owner.outputs.lc }}
+        # -tt 强制分配 pty,防止远端命令在 stdin 关闭后被提前结束。
+        # ServerAliveInterval 让客户端定期发心跳,长 pull 不会被认为 idle 断连。
+        run: |
+          ssh -tt \
+            -o ServerAliveInterval=30 \
+            -o ServerAliveCountMax=20 \
+            -p ${{ secrets.SSH_PORT || 22 }} \
+            ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} \
+            "IMAGE_TAG='${IMAGE_TAG}' OWNER='${OWNER}' bash /tmp/newsfeed-deploy.sh && rm -f /tmp/newsfeed-deploy.sh"
