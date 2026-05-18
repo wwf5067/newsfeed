@@ -19,7 +19,9 @@ func NewRepository(pool *pgxpool.Pool) *Repository {
 // ListArticles 简单分页查询,后续按业务再扩展过滤条件。
 func (r *Repository) ListArticles(ctx context.Context, limit, offset int) ([]model.Article, error) {
 	const q = `
-SELECT id, source_key, url, title, content, author, heat, published_at, fetched_at
+SELECT id, source_key, url, title, content, author,
+       heat, heat_value, prev_heat, prev_heat_value,
+       published_at, fetched_at
 FROM articles
 ORDER BY published_at DESC
 LIMIT $1 OFFSET $2
@@ -34,7 +36,8 @@ LIMIT $1 OFFSET $2
 	for rows.Next() {
 		var a model.Article
 		if err := rows.Scan(&a.ID, &a.SourceKey, &a.URL, &a.Title, &a.Content,
-			&a.Author, &a.Heat, &a.PublishedAt, &a.FetchedAt); err != nil {
+			&a.Author, &a.Heat, &a.HeatValue, &a.PrevHeat, &a.PrevHeatValue,
+			&a.PublishedAt, &a.FetchedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, a)

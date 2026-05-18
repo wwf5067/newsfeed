@@ -167,6 +167,7 @@ func (z *ZhihuHot) Fetch(ctx context.Context) ([]model.Article, error) {
 			Content:     t.Excerpt,
 			Author:      t.AuthorName,
 			Heat:        item.DetailText,
+			HeatValue:   crawler.ParseHeat(item.DetailText),
 			PublishedAt: published,
 		})
 	}
