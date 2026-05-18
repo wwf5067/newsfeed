@@ -18,7 +18,7 @@ type Config struct {
 	DatabaseURL string
 
 	// API 服务
-	APIAddr         string        // 监听地址,如 :8080
+	APIAddr         string // 监听地址,如 :8080
 	APIReadTimeout  time.Duration
 	APIWriteTimeout time.Duration
 
@@ -29,6 +29,10 @@ type Config struct {
 	// 直接复制浏览器登录后的整段 Cookie 头(如 "_zap=...; z_c0=...; ...")
 	ZhihuCookie   string
 	ZhihuSchedule string // cron 表达式(支持秒),默认 30 分钟一次
+
+	// 数据源:B 站热门(无需 cookie,显式开关控制是否启用)
+	BilibiliEnabled  bool
+	BilibiliSchedule string // cron 表达式(支持秒),默认 30 分钟一次
 
 	// 每日名言 job:从内置库随机选 2 条以 announcements 形式发布
 	QuotesSchedule string // cron 表达式(支持秒),默认每天 8:00
@@ -43,18 +47,20 @@ type Config struct {
 // Load 从环境变量读取配置。缺失必填项会返回错误。
 func Load() (*Config, error) {
 	cfg := &Config{
-		Env:             getEnv("APP_ENV", "dev"),
-		LogLevel:        getEnv("LOG_LEVEL", "info"),
-		DatabaseURL:     os.Getenv("DATABASE_URL"),
-		APIAddr:         getEnv("API_ADDR", ":8080"),
-		APIReadTimeout:  getEnvDuration("API_READ_TIMEOUT", 10*time.Second),
-		APIWriteTimeout: getEnvDuration("API_WRITE_TIMEOUT", 15*time.Second),
-		CrawlerAddr:     getEnv("CRAWLER_ADDR", "127.0.0.1:8081"),
-		ZhihuCookie:     os.Getenv("ZHIHU_COOKIE"),
-		ZhihuSchedule:   getEnv("ZHIHU_SCHEDULE", "0 */30 * * * *"),
-		QuotesSchedule:  getEnv("QUOTES_SCHEDULE", "0 0 8 * * *"),
-		RunOnStart:      strings.EqualFold(os.Getenv("RUN_ON_START"), "true"),
-		RetentionDays:   getEnvInt("RETENTION_DAYS", 30),
+		Env:              getEnv("APP_ENV", "dev"),
+		LogLevel:         getEnv("LOG_LEVEL", "info"),
+		DatabaseURL:      os.Getenv("DATABASE_URL"),
+		APIAddr:          getEnv("API_ADDR", ":8080"),
+		APIReadTimeout:   getEnvDuration("API_READ_TIMEOUT", 10*time.Second),
+		APIWriteTimeout:  getEnvDuration("API_WRITE_TIMEOUT", 15*time.Second),
+		CrawlerAddr:      getEnv("CRAWLER_ADDR", "127.0.0.1:8081"),
+		ZhihuCookie:      os.Getenv("ZHIHU_COOKIE"),
+		ZhihuSchedule:    getEnv("ZHIHU_SCHEDULE", "0 */30 * * * *"),
+		BilibiliEnabled:  strings.EqualFold(os.Getenv("BILIBILI_ENABLED"), "true"),
+		BilibiliSchedule: getEnv("BILIBILI_SCHEDULE", "0 */30 * * * *"),
+		QuotesSchedule:   getEnv("QUOTES_SCHEDULE", "0 0 8 * * *"),
+		RunOnStart:       strings.EqualFold(os.Getenv("RUN_ON_START"), "true"),
+		RetentionDays:    getEnvInt("RETENTION_DAYS", 30),
 	}
 
 	if cfg.DatabaseURL == "" {

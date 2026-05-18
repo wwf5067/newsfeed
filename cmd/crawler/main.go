@@ -54,6 +54,18 @@ func main() {
 		log.Warn("zhihu_hot skipped: ZHIHU_COOKIE is empty")
 	}
 
+	if cfg.BilibiliEnabled {
+		s := sources.NewBilibili(cfg.BilibiliSchedule)
+		if err := runner.Register(s); err != nil {
+			log.Error("register source", "key", s.Key(), "err", err)
+			os.Exit(1)
+		}
+		log.Info("source registered", "key", s.Key(), "schedule", s.Schedule())
+		registered++
+	} else {
+		log.Warn("bilibili_popular skipped: BILIBILI_ENABLED is not true")
+	}
+
 	if registered == 0 {
 		log.Warn("no sources registered, crawler will idle")
 	}
