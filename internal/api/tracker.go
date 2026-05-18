@@ -22,11 +22,12 @@ type trackerSourceStat struct {
 }
 
 type trackerArticleRef struct {
-	ID        int64  `json:"id"`
-	Title     string `json:"title"`
-	SourceKey string `json:"source_key"`
-	Heat      string `json:"heat"`
-	HeatValue int64  `json:"heat_value"`
+	ID          int64     `json:"id"`
+	Title       string    `json:"title"`
+	SourceKey   string    `json:"source_key"`
+	Heat        string    `json:"heat"`
+	HeatValue   int64     `json:"heat_value"`
+	PublishedAt time.Time `json:"published_at"` // 前端按时间分组用
 }
 
 type trackerTopic struct {
@@ -854,29 +855,35 @@ func flattenTrackerTerms(in map[string]struct{}, limit int) []string {
 	return out
 }
 
+// buildTrackerStoryline 由调用方负责把 articles 过滤为"已包含 term"。
+// 这里只做聚合统计(sources / momentum / summary)和组装响应。
+//
+// 旧实现内部还会再调一次 filterArticlesByTerm 兜底(in-memory 多别名匹配),
+// 但现在数据来自 ListArticlesByTerms 的 SQL 直查,已是精确匹配,不必重复过滤。
 func buildTrackerStoryline(term string, articles []model.Article, windowHours int) trackerStorylineResp {
-	filtered := filterArticlesByTerm(term, articles)
-	items := make([]trackerArticleRef, 0, len(filtered))
+	items := make([]trackerArticleRef, 0, len(articles))
 	sources := map[string]int{}
 	var scoreDelta int64
-	for _, article := range filtered {
+	for _, article := range articles {
 		items = append(items, trackerArticleRef{
-			ID:        article.ID,
-			Title:     article.Title,
-			SourceKey: article.SourceKey,
-			Heat:      article.Heat,
-			HeatValue: article.HeatValue,
+			ID:          article.ID,
+			Title:       article.Title,
+			SourceKey:   article.SourceKey,
+			Heat:        article.Heat,
+			HeatValue:   article.HeatValue,
+			PublishedAt: article.PublishedAt,
 		})
 		sources[article.SourceKey]++
 		scoreDelta += article.HeatValue - article.PrevHeatValue
 	}
 
-	summary := buildTrackerSummary(term, filtered, windowHours)
+	summary := buildTrackerSummary(term, articles, windowHours)
 	momentum := "flat"
-	if len(filtered) >= 2 {
-		first := filtered[len(filtered)-1]
-		last := filtered[0]
-		momentum = detectMomentum(last.HeatValue-first.HeatValue, len(filtered)-1)
+	if len(articles) >= 2 {
+		// SQL 已按 fetched_at DESC,articles[0] 是最新,len-1 是最旧
+		first := articles[len(articles)-1]
+		last := articles[0]
+		momentum = detectMomentum(last.HeatValue-first.HeatValue, len(articles)-1)
 	}
 
 	return trackerStorylineResp{

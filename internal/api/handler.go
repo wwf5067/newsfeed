@@ -181,12 +181,22 @@ func (h *Handler) GetTrackerStoryline(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	window := parseIntDefault(r.URL.Query().Get("window"), 24)
-	if window <= 0 || window > 168 {
+	// window=0 表示"全部"(不限时间);其它值 clamp 到 [1, 720] 范围(720h = 30 天 retention 上限)。
+	rawWindow := parseIntDefault(r.URL.Query().Get("window"), 24)
+	window := rawWindow
+	if window < 0 {
 		window = 24
 	}
+	if window > 720 {
+		window = 720
+	}
 
-	articles, err := h.repo.ListRecentArticles(r.Context(), window, 200)
+	// 把用户传的 term 通过 lexicon 展开为完整别名集合,SQL 层一次匹配所有别名。
+	// "特朗普" → ["特朗普", "Trump", "trump", "川普"]
+	// 不在 lexicon 里的 term 退化为 [term],保持原行为可用(自由词搜索)。
+	terms := expandTermAliases(term)
+
+	articles, err := h.repo.ListArticlesByTerms(r.Context(), terms, window, 200)
 	if err != nil {
 		h.logger.Error("tracker storyline", "term", term, "err", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
@@ -194,6 +204,22 @@ func (h *Handler) GetTrackerStoryline(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, buildTrackerStoryline(term, articles, window))
+}
+
+// expandTermAliases 把 term 通过 lexicon 展开为所有别名;非 lexicon 词退化为 [term]。
+// 用于实体页 SQL 多别名匹配,让"Trump"也能命中"特朗普"那批文章。
+func expandTermAliases(term string) []string {
+	normalized := normalizeTrackerToken(term)
+	if normalized == "" {
+		return []string{term}
+	}
+	canonical := canonicalizeTrackerToken(normalized)
+	if canonical != "" {
+		if aliases := trackerEntityTermsByLabel[canonical]; len(aliases) > 0 {
+			return aliases
+		}
+	}
+	return []string{normalized}
 }
 
 func (h *Handler) ListTrackerRelated(w http.ResponseWriter, r *http.Request) {

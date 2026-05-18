@@ -167,6 +167,82 @@ LIMIT $2
 	return out, rows.Err()
 }
 
+// ListArticlesByTerms 按多个别名做 ILIKE OR 匹配,返回 fetched_at 倒序。
+//
+// 用于实体页聚合:从 lexicon 拿到某个 Label 的所有别名(如"特朗普 / Trump / trump / 川普"),
+// 一次 SQL 把全 30 天 retention 内匹配的文章捞出来,前端再做时间分组展示。
+//
+// 参数:
+//   - terms:别名列表,空切片直接返回 nil
+//   - sinceHours:0 表示不限时间,>0 限制 fetched_at >= NOW() - sinceHours
+//   - limit:默认 200,>500 截断到 500
+//
+// 安全:每个 term 走 $N 参数化绑定,不拼字符串,杜绝 SQL 注入。
+// terms 数量上限 30,防止某些极端 lexicon entry 别名爆炸把 SQL 撑爆。
+func (r *Repository) ListArticlesByTerms(
+	ctx context.Context,
+	terms []string,
+	sinceHours int,
+	limit int,
+) ([]model.Article, error) {
+	if len(terms) == 0 {
+		return nil, nil
+	}
+	if len(terms) > 30 {
+		terms = terms[:30]
+	}
+	if limit <= 0 || limit > 500 {
+		limit = 200
+	}
+
+	// 拼 (title ILIKE $1 OR content ILIKE $1 OR title ILIKE $2 OR ...)
+	conds := make([]string, 0, len(terms)*2)
+	args := make([]any, 0, len(terms)+2)
+	for _, t := range terms {
+		args = append(args, "%"+t+"%")
+		idx := len(args)
+		conds = append(conds, fmt.Sprintf("title ILIKE $%d", idx))
+		conds = append(conds, fmt.Sprintf("content ILIKE $%d", idx))
+	}
+	where := "WHERE (" + strings.Join(conds, " OR ") + ")"
+
+	if sinceHours > 0 {
+		args = append(args, sinceHours)
+		where += fmt.Sprintf(" AND fetched_at >= NOW() - make_interval(hours => $%d)", len(args))
+	}
+
+	args = append(args, limit)
+	limitIdx := len(args)
+
+	q := fmt.Sprintf(`
+SELECT id, source_key, url, title, content, author,
+       heat, heat_value, prev_heat, prev_heat_value,
+       published_at, fetched_at
+FROM articles
+%s
+ORDER BY fetched_at DESC
+LIMIT $%d
+`, where, limitIdx)
+
+	rows, err := r.pool.Query(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []model.Article
+	for rows.Next() {
+		var a model.Article
+		if err := rows.Scan(&a.ID, &a.SourceKey, &a.URL, &a.Title, &a.Content,
+			&a.Author, &a.Heat, &a.HeatValue, &a.PrevHeat, &a.PrevHeatValue,
+			&a.PublishedAt, &a.FetchedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
 // HeatPoint 单个时序数据点(用于前端 sparkline)。
 type HeatPoint struct {
 	HeatValue  int64     `json:"heat_value"`
