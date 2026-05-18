@@ -500,12 +500,16 @@ export default function Home() {
     return top;
   }, [articles]);
 
-  // 飙升判定:相比上一次抓取(30 分钟前) heat 增幅 >= 30% 即认为飙升。
-  // 严格意义上是 30min 增幅,但抓取频率就是 30min,语义贴近"短时上扬"。
-  // 首次上榜(prev_heat_value === 0)走 NEW 徽章,不算飙升。
+  // 飙升判定:命中以下任一即认为飙升。
+  //  1) 相比上一次抓取(30 分钟前) heat 增幅 >= 10%
+  //  2) 首次上榜(prev_heat_value === 0 且当前 heat_value > 0)——能进我们抓的源
+  //     就已经在它的热榜/热门里了,所以"首次出现"本身就是一种突然飙升
+  // NEW 徽章和 🚀 图标会重叠显示(语义独立:NEW 强调"刚出现",🚀 强调"涨势"),
+  // 视觉上能让用户一眼分清"老朋友突然涨"与"新面孔上榜"。
   function isSurging(a: Article): boolean {
-    if (a.prev_heat_value <= 0 || a.heat_value <= 0) return false;
-    return (a.heat_value - a.prev_heat_value) / a.prev_heat_value >= 0.3;
+    if (a.heat_value <= 0) return false;
+    if (a.prev_heat_value <= 0) return true; // 首次上榜
+    return (a.heat_value - a.prev_heat_value) / a.prev_heat_value >= 0.1;
   }
 
   return (
