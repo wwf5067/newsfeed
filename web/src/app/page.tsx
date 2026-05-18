@@ -355,7 +355,7 @@ export default function Home() {
   return (
     <main className="mx-auto w-full max-w-3xl px-4 py-8">
       <AnnouncementBar />
-      <header className="mb-6 flex items-baseline justify-between">
+      <header className="mb-6 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
         <h1 className="text-2xl font-semibold tracking-tight">Newsfeed</h1>
         <div className="flex items-baseline gap-3 text-sm text-zinc-500">
           {lastUpdated && (
@@ -438,6 +438,7 @@ export default function Home() {
                   starred.toggle(a.id);
                 }}
                 aria-label={isStarred ? "取消收藏" : "收藏"}
+                aria-pressed={isStarred}
                 className={
                   "absolute right-3 top-3 rounded p-1 text-base transition " +
                   (isStarred
@@ -452,13 +453,13 @@ export default function Home() {
                 target="_blank"
                 rel="noreferrer"
                 onClick={() => read.add(a.id)}
-                className="flex gap-3 pr-8"
+                className="flex gap-3 pr-9"
               >
                 <span className="shrink-0 select-none font-mono text-sm text-zinc-400 tabular-nums">
                   {String(i + 1).padStart(2, "0")}
                 </span>
                 <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2">
+                  <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
                     <h2
                       className={
                         "text-base font-medium leading-snug group-hover:underline " +
