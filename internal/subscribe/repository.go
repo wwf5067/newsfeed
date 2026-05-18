@@ -151,62 +151,6 @@ ORDER BY s.id, a.id
 	return out, rows.Err()
 }
 
-// PreviewMatch 一条预览样本:命中关键词的文章简要信息。
-// 仅供前端"预估命中量"使用,不写库、不去重。
-type PreviewMatch struct {
-	ID        int64  `json:"id"`
-	Title     string `json:"title"`
-	SourceKey string `json:"source_key"`
-}
-
-// PreviewMatches 给定关键词,在最近 7 天 articles 里数有多少篇能匹配,并返回最多 5 条样本。
-// 语义与 FindHits 一致(title/content ILIKE),所以预估数 vs 未来真实通知数大致对得上。
-//
-// 没有读 keyword_notifications,所以"老订阅已通知过的"也会被算进去——
-// 但这是给"新订阅前评估关键词好坏"用的,看的就是命中体量,不是看新增量,行为是对的。
-//
-// 7 天窗口是为了避免全表扫;articles 表会持续增长,无时间过滤的 ILIKE 在大表上会很慢。
-func (r *Repository) PreviewMatches(ctx context.Context, keyword string) (count int, samples []PreviewMatch, err error) {
-	keyword = strings.TrimSpace(keyword)
-	if keyword == "" {
-		return 0, nil, nil
-	}
-	// 单次 query 同时取 count 和 sample 比较麻烦,直接两条 SQL 顺序跑,
-	// 都走同一个 ILIKE 表达式,Postgres 自然能利用同一份扫描结果(或索引)。
-	const cutoff = "NOW() - INTERVAL '7 days'"
-	const countQ = `
-SELECT COUNT(*) FROM articles
-WHERE published_at >= ` + cutoff + `
-  AND (title ILIKE '%' || $1 || '%' OR content ILIKE '%' || $1 || '%')
-`
-	if err = r.pool.QueryRow(ctx, countQ, keyword).Scan(&count); err != nil {
-		return 0, nil, err
-	}
-	if count == 0 {
-		return 0, nil, nil
-	}
-	const sampleQ = `
-SELECT id, title, source_key FROM articles
-WHERE published_at >= ` + cutoff + `
-  AND (title ILIKE '%' || $1 || '%' OR content ILIKE '%' || $1 || '%')
-ORDER BY published_at DESC
-LIMIT 5
-`
-	rows, err := r.pool.Query(ctx, sampleQ, keyword)
-	if err != nil {
-		return count, nil, err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var m PreviewMatch
-		if err := rows.Scan(&m.ID, &m.Title, &m.SourceKey); err != nil {
-			return count, nil, err
-		}
-		samples = append(samples, m)
-	}
-	return count, samples, rows.Err()
-}
-
 // MarkNotified 批量写入 keyword_notifications 完成去重登记。
 // ON CONFLICT DO NOTHING 兼容并发场景(理论上不会发生,但加上不损失成本)。
 func (r *Repository) MarkNotified(ctx context.Context, hits []Hit) error {

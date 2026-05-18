@@ -87,35 +87,6 @@ func (h *Handler) DeleteSubscription(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
-// PreviewSubscription GET /api/v1/subscriptions/preview?keyword=xxx
-// 评估关键词在近 7 天文章中的命中量,返回 {count, samples}。仅用于前端订阅前预览,不写库。
-// 空 keyword 返回 {count: 0, samples: []},前端不必拦截调用。
-func (h *Handler) PreviewSubscription(w http.ResponseWriter, r *http.Request) {
-	if h.subscribeRepo == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "subscribe disabled"})
-		return
-	}
-	keyword := strings.TrimSpace(r.URL.Query().Get("keyword"))
-	if keyword == "" {
-		writeJSON(w, http.StatusOK, map[string]any{"count": 0, "samples": []subscribe.PreviewMatch{}})
-		return
-	}
-	if len(keyword) > maxKeywordLen {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "keyword too long"})
-		return
-	}
-	count, samples, err := h.subscribeRepo.PreviewMatches(r.Context(), keyword)
-	if err != nil {
-		h.logger.Error("preview subscription", "keyword", keyword, "err", err)
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
-		return
-	}
-	if samples == nil {
-		samples = []subscribe.PreviewMatch{}
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"count": count, "samples": samples})
-}
-
 // maskEmail 把 "user@example.com" 简单遮蔽成 "use***@example.com",
 // 前端展示用,告诉用户邮件会发到哪里但不暴露完整地址。
 // 空串返回空串(前端据此判断"未配置邮件")。
