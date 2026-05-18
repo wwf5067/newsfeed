@@ -170,6 +170,32 @@ func (h *Handler) ListTrackers(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (h *Handler) GetTrackerStoryline(w http.ResponseWriter, r *http.Request) {
+	term := strings.TrimSpace(r.URL.Query().Get("term"))
+	if term == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "term required"})
+		return
+	}
+	if len([]rune(term)) > 32 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "term too long"})
+		return
+	}
+
+	window := parseIntDefault(r.URL.Query().Get("window"), 24)
+	if window <= 0 || window > 168 {
+		window = 24
+	}
+
+	articles, err := h.repo.ListRecentArticles(r.Context(), window, 200)
+	if err != nil {
+		h.logger.Error("tracker storyline", "term", term, "err", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, buildTrackerStoryline(term, articles, window))
+}
+
 // allowedSurgeWindows 限制窗口枚举,防止任意值导致非预期的 SQL 扫描区间。
 var allowedSurgeWindows = map[int]bool{1: true, 6: true, 24: true}
 

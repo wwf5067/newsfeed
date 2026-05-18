@@ -63,6 +63,23 @@ type TrackerResp = {
   items: TrackerTopic[];
 };
 
+type TrackerStorylineResp = {
+  term: string;
+  window: { hours: number };
+  summary: string[];
+  sources: { source_key: string; count: number }[];
+  items: {
+    id: number;
+    title: string;
+    source_key: string;
+    heat: string;
+    heat_value: number;
+  }[];
+  momentum: "up" | "flat" | "down";
+  score_delta: number;
+  total_articles: number;
+};
+
 // 自动刷新间隔:5 分钟
 const POLL_INTERVAL_MS = 5 * 60 * 1000;
 // 首页每页条数。首屏保持轻量,需要时再继续展开。
@@ -116,6 +133,19 @@ async function fetchTrackers(windowHours: number): Promise<TrackerResp> {
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const data: TrackerResp = await res.json();
   return { window: data.window, items: data.items ?? [] };
+}
+
+async function fetchTrackerStoryline(term: string, windowHours: number): Promise<TrackerStorylineResp> {
+  const params = new URLSearchParams({ term, window: String(windowHours) });
+  const res = await fetch(`/api/v1/trackers/storyline?${params.toString()}`, { cache: "no-store" });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const data: TrackerStorylineResp = await res.json();
+  return {
+    ...data,
+    summary: data.summary ?? [],
+    sources: data.sources ?? [],
+    items: data.items ?? [],
+  };
 }
 
 function formatTime(iso: string): string {
@@ -461,6 +491,9 @@ function TrackerPanel({ onPickTerm }: { onPickTerm: (term: string) => void }) {
   const [items, setItems] = useState<TrackerTopic[]>([]);
   const [windowHours, setWindowHours] = useState(24);
   const [selectedWindow, setSelectedWindow] = useState(24);
+  const [storyline, setStoryline] = useState<TrackerStorylineResp | null>(null);
+  const [storylineLoading, setStorylineLoading] = useState(false);
+  const [storylineError, setStorylineError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -480,6 +513,19 @@ function TrackerPanel({ onPickTerm }: { onPickTerm: (term: string) => void }) {
       cancelled = true;
       clearInterval(timer);
     };
+  }, [selectedWindow]);
+
+  const openStoryline = useCallback(async (term: string) => {
+    setStorylineLoading(true);
+    setStorylineError(null);
+    try {
+      const data = await fetchTrackerStoryline(term, selectedWindow);
+      setStoryline(data);
+    } catch (e) {
+      setStorylineError(String(e));
+    } finally {
+      setStorylineLoading(false);
+    }
   }, [selectedWindow]);
 
   if (items.length === 0) return null;
@@ -524,7 +570,7 @@ function TrackerPanel({ onPickTerm }: { onPickTerm: (term: string) => void }) {
                 <div className="flex flex-wrap items-center gap-2">
                   <button
                     type="button"
-                    onClick={() => onPickTerm(item.label)}
+                    onClick={() => openStoryline(item.label)}
                     className="text-sm font-semibold text-zinc-900 transition hover:text-amber-700 dark:text-zinc-100 dark:hover:text-amber-300"
                   >
                     {item.label}
@@ -600,6 +646,77 @@ function TrackerPanel({ onPickTerm }: { onPickTerm: (term: string) => void }) {
           </div>
         ))}
       </div>
+
+      {(storyline || storylineLoading || storylineError) && (
+        <div className="mt-4 rounded-lg border border-zinc-200 bg-zinc-50 p-4 dark:border-zinc-700 dark:bg-zinc-950">
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <div>
+              <h3 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">
+                {storyline?.term ?? "话题时间线"}
+              </h3>
+              {storyline && (
+                <p className="text-xs text-zinc-500">
+                  {storyline.window.hours} 小时内共 {storyline.total_articles} 条相关文章
+                  {storyline.score_delta !== 0 && (
+                    <span className="ml-1">聚合热度变化 {formatSignedHeat(storyline.score_delta)}</span>
+                  )}
+                </p>
+              )}
+            </div>
+            <button
+              type="button"
+              onClick={() => setStoryline(null)}
+              className="text-xs text-zinc-500 transition hover:text-zinc-900 dark:hover:text-zinc-100"
+            >
+              关闭
+            </button>
+          </div>
+
+          {storylineLoading && <div className="text-sm text-zinc-500">正在整理时间线…</div>}
+          {storylineError && <div className="text-sm text-red-600 dark:text-red-400">加载失败: {storylineError}</div>}
+
+          {storyline && !storylineLoading && !storylineError && (
+            <div className="space-y-4">
+              <div className="space-y-1.5 text-sm text-zinc-700 dark:text-zinc-300">
+                {storyline.summary.map((line) => (
+                  <p key={line}>{line}</p>
+                ))}
+              </div>
+
+              <div className="flex flex-wrap gap-1.5 text-[11px] text-zinc-500">
+                {storyline.sources.map((source) => (
+                  <span key={source.source_key} className="rounded-full bg-white px-2 py-0.5 dark:bg-zinc-900">
+                    {SOURCE_LABELS[source.source_key] ?? source.source_key} {source.count}
+                  </span>
+                ))}
+                <button
+                  type="button"
+                  onClick={() => onPickTerm(storyline.term)}
+                  className="rounded-full bg-amber-100 px-2 py-0.5 text-amber-700 transition hover:bg-amber-200 dark:bg-amber-950 dark:text-amber-300 dark:hover:bg-amber-900"
+                >
+                  查看全部相关文章
+                </button>
+              </div>
+
+              <div className="space-y-2">
+                {storyline.items.map((item) => (
+                  <Link
+                    key={item.id}
+                    href={`/article?id=${item.id}`}
+                    className="block rounded-md border border-transparent bg-white px-3 py-2 text-sm text-zinc-700 transition hover:border-zinc-300 hover:text-zinc-900 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:border-zinc-600 dark:hover:text-zinc-100"
+                  >
+                    <div className="font-medium">{item.title}</div>
+                    <div className="mt-1 flex flex-wrap gap-2 text-[11px] text-zinc-500">
+                      <span>{SOURCE_LABELS[item.source_key] ?? item.source_key}</span>
+                      {(item.heat || item.heat_value > 0) && <span>{item.heat || formatHeat(item.heat_value)}</span>}
+                    </div>
+                  </Link>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
     </section>
   );
 }

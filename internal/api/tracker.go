@@ -3,6 +3,7 @@ package api
 import (
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -45,6 +46,17 @@ type trackerTopic struct {
 type trackerResp struct {
 	Window trackerWindow  `json:"window"`
 	Items  []trackerTopic `json:"items"`
+}
+
+type trackerStorylineResp struct {
+	Term          string              `json:"term"`
+	Window        trackerWindow       `json:"window"`
+	Summary       []string            `json:"summary"`
+	Sources       []trackerSourceStat `json:"sources"`
+	Items         []trackerArticleRef `json:"items"`
+	Momentum      string              `json:"momentum"`
+	ScoreDelta    int64               `json:"score_delta"`
+	TotalArticles int                 `json:"total_articles"`
 }
 
 type trackerAccumulator struct {
@@ -355,6 +367,104 @@ func flattenTrackerTerms(in map[string]struct{}, limit int) []string {
 		out = out[:limit]
 	}
 	return out
+}
+
+func buildTrackerStoryline(term string, articles []model.Article, windowHours int) trackerStorylineResp {
+	filtered := filterArticlesByTerm(term, articles)
+	items := make([]trackerArticleRef, 0, len(filtered))
+	sources := map[string]int{}
+	var scoreDelta int64
+	for _, article := range filtered {
+		items = append(items, trackerArticleRef{
+			ID:        article.ID,
+			Title:     article.Title,
+			SourceKey: article.SourceKey,
+			Heat:      article.Heat,
+			HeatValue: article.HeatValue,
+		})
+		sources[article.SourceKey]++
+		scoreDelta += article.HeatValue - article.PrevHeatValue
+	}
+
+	summary := buildTrackerSummary(term, filtered, windowHours)
+	momentum := "flat"
+	if len(filtered) >= 2 {
+		first := filtered[len(filtered)-1]
+		last := filtered[0]
+		momentum = detectMomentum(last.HeatValue-first.HeatValue, len(filtered)-1)
+	}
+
+	return trackerStorylineResp{
+		Term:          term,
+		Window:        trackerWindow{Hours: windowHours},
+		Summary:       summary,
+		Sources:       flattenTrackerSources(sources),
+		Items:         items,
+		Momentum:      momentum,
+		ScoreDelta:    scoreDelta,
+		TotalArticles: len(items),
+	}
+}
+
+func filterArticlesByTerm(term string, articles []model.Article) []model.Article {
+	term = strings.TrimSpace(strings.ToLower(term))
+	if term == "" {
+		return nil
+	}
+	out := make([]model.Article, 0, len(articles))
+	for _, article := range articles {
+		body := strings.ToLower(article.Title + "\n" + article.Content)
+		if strings.Contains(body, term) {
+			out = append(out, article)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].PublishedAt.Equal(out[j].PublishedAt) {
+			return out[i].HeatValue > out[j].HeatValue
+		}
+		return out[i].PublishedAt.After(out[j].PublishedAt)
+	})
+	if len(out) > 20 {
+		out = out[:20]
+	}
+	return out
+}
+
+func buildTrackerSummary(term string, articles []model.Article, windowHours int) []string {
+	if len(articles) == 0 {
+		return []string{"当前窗口内还没有足够的相关文章。"}
+	}
+
+	bullets := []string{}
+	latest := articles[0]
+	bullets = append(bullets,
+		"最近 "+strconv.Itoa(windowHours)+" 小时内出现 "+strconv.Itoa(len(articles))+" 条相关文章，最新进展是《"+latest.Title+"》。")
+
+	sourceCounts := map[string]int{}
+	for _, article := range articles {
+		sourceCounts[article.SourceKey]++
+	}
+	sourceStats := flattenTrackerSources(sourceCounts)
+	if len(sourceStats) > 1 {
+		bullets = append(bullets,
+			"讨论已扩散到 "+strconv.Itoa(len(sourceStats))+" 个内容源，主来源是 "+sourceStats[0].SourceKey+"。")
+	}
+
+	hottest := latest
+	for _, article := range articles[1:] {
+		if article.HeatValue > hottest.HeatValue {
+			hottest = article
+		}
+	}
+	if hottest.HeatValue > 0 {
+		bullets = append(bullets,
+			"当前热度最高的相关内容是《"+hottest.Title+"》，热度约 "+hottest.Heat+"。")
+	}
+
+	if len(bullets) > 3 {
+		bullets = bullets[:3]
+	}
+	return bullets
 }
 
 func maxInt64(a, b int64) int64 {

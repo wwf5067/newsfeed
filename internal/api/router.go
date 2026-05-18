@@ -24,6 +24,7 @@ func NewRouter(h *Handler) http.Handler {
 		r.Get("/articles", h.ListArticles)
 		r.Get("/articles/surging", h.ListSurging)
 		r.Get("/trackers", h.ListTrackers)
+		r.Get("/trackers/storyline", h.GetTrackerStoryline)
 		r.Get("/articles/{id}", h.GetArticleByID)
 		r.Get("/articles/{id}/heat-history", h.GetHeatHistory)
 		r.Get("/announcements", h.ListAnnouncements)
