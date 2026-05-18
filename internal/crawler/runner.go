@@ -6,13 +6,13 @@ import (
 	"fmt"
 	"log/slog"
 	"math/rand"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/robfig/cron/v3"
 
 	"github.com/wwf5067/newsfeed/internal/crawler/digest"
-	"github.com/wwf5067/newsfeed/internal/crawler/quotes"
 	"github.com/wwf5067/newsfeed/internal/subscribe"
 )
 
@@ -36,9 +36,12 @@ type Runner struct {
 
 	retentionDays int // 文章保留天数,<=0 表示不清理
 
-	// 每日名言 job(可选,nil 时不启用)
+	// 每日数据摘要 job(可选,announcementsRepo=nil 时不启用)。
+	// 历史:此 job 一开始是"每日名言",后来改成"今日数据摘要",故 schedule 来源
+	// 变量名也从 QUOTES_SCHEDULE 改成 SUMMARY_SCHEDULE。但 announcement.level 仍用
+	// 'quote' 这个枚举值——只是因为 DB 已经有这个 CHECK,改起来牵涉 migration 不值。
 	announcementsRepo *AnnouncementsRepository
-	quotesSchedule    string // cron 表达式,空字符串则不注册
+	summarySchedule   string // cron 表达式,空字符串则不注册
 
 	// 每日精选邮件 job(可选,digest=nil 时不启用)
 	digest         *digest.Digest
@@ -54,7 +57,7 @@ func NewRunner(
 	repo *Repository,
 	announcementsRepo *AnnouncementsRepository,
 	retentionDays int,
-	quotesSchedule string,
+	summarySchedule string,
 	digestJob *digest.Digest,
 	digestSchedule string,
 	subscribeMatcher *subscribe.Matcher,
@@ -66,7 +69,7 @@ func NewRunner(
 		health:            make(map[string]*SourceHealth),
 		retentionDays:     retentionDays,
 		announcementsRepo: announcementsRepo,
-		quotesSchedule:    quotesSchedule,
+		summarySchedule:   summarySchedule,
 		digest:            digestJob,
 		digestSchedule:    digestSchedule,
 		subscribe:         subscribeMatcher,
@@ -120,13 +123,13 @@ func (r *Runner) Start() {
 		}
 	}
 
-	// 注册每日名言 job(配置完整才启用)
-	if r.announcementsRepo != nil && r.quotesSchedule != "" {
-		_, err := r.cron.AddFunc(r.quotesSchedule, r.runQuotesJob)
+	// 注册今日数据摘要 job(配置完整才启用)
+	if r.announcementsRepo != nil && r.summarySchedule != "" {
+		_, err := r.cron.AddFunc(r.summarySchedule, r.runDailySummaryJob)
 		if err != nil {
-			r.logger.Error("register quotes job", "err", err)
+			r.logger.Error("register daily summary job", "err", err)
 		} else {
-			r.logger.Info("quotes job registered", "schedule", r.quotesSchedule)
+			r.logger.Info("daily summary job registered", "schedule", r.summarySchedule)
 		}
 	}
 
@@ -240,38 +243,121 @@ func (r *Runner) purge() {
 	r.logger.Info("purge done", "retention_days", r.retentionDays, "deleted", deleted)
 }
 
-// runQuotesJob 一次"换今日名言"流程:
-//  1. 软删此前 active 的 quote 公告(只动 level='quote',运维公告不受影响)
-//  2. 从内置库随机挑 1 条插入,ends_at 设为下一轮 cron 后 1 小时(漂移容错)
+// runDailySummaryJob 一次"今日数据摘要"流程:
+//  1. 软删此前所有 level='quote' 的公告(让页面始终只显示最新的一条摘要)
+//  2. 查 articles 表当日各源统计,构造一条公告插入
 //
 // 任一步失败都只记 error,不阻塞下一步,保证最大努力可用性。
-func (r *Runner) runQuotesJob() {
+// 摘要文案样例:
+//
+//	📊 今日 60 条 · 知乎最热「普京访华」571 万 · B 站最高「..」320 万播放
+//
+// announcements 用 level='quote' 沿用历史 schema,不引入新枚举值。
+func (r *Runner) runDailySummaryJob() {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	log := r.logger.With("job", "quotes")
-	log.Info("quotes refresh started")
+	log := r.logger.With("job", "summary")
+	log.Info("daily summary refresh started")
+
+	stats, err := r.repo.TodayStatsBySource(ctx)
+	if err != nil {
+		log.Error("query today stats failed", "err", err)
+		return
+	}
+	if len(stats) == 0 {
+		log.Info("no articles today, skipping summary")
+		return
+	}
+
+	content := buildSummaryContent(stats)
+	if content == "" {
+		log.Info("summary content empty, skipping")
+		return
+	}
 
 	if n, err := r.announcementsRepo.DeactivateActiveQuotes(ctx); err != nil {
-		log.Error("deactivate previous quotes failed", "err", err)
+		log.Error("deactivate previous summary failed", "err", err)
 	} else {
-		log.Info("deactivated previous quotes", "count", n)
+		log.Info("deactivated previous summary", "count", n)
 	}
 
-	picks := quotes.PickN(1)
-	// 25h 给每天一次的 cron 留 1h 漂移容错;若 cron 漏跑,旧名言也会自然过期消失
+	// 设个 25h 兜底过期时间,万一 cron 完全停摆也不会一直挂着昨天的数据
 	endsAt := time.Now().Add(25 * time.Hour)
-	for _, q := range picks {
-		text := q.Text
-		if q.Source != "" {
-			text = fmt.Sprintf("%s —— %s", q.Text, q.Source)
-		}
-		if id, err := r.announcementsRepo.InsertQuote(ctx, text, &endsAt); err != nil {
-			log.Error("insert quote failed", "err", err)
-		} else {
-			log.Info("quote inserted", "id", id)
-		}
+	if id, err := r.announcementsRepo.InsertQuote(ctx, content, &endsAt); err != nil {
+		log.Error("insert summary failed", "err", err)
+	} else {
+		log.Info("summary inserted", "id", id, "content", content)
 	}
+}
+
+// sourceLabels 把 source_key 转成展示名;未知源回落原 key。
+var sourceLabels = map[string]string{
+	"zhihu_hot":        "知乎",
+	"bilibili_popular": "B 站",
+}
+
+// sourceMetricNoun 不同源的"最热"指标名(避免拿"播放量"和"热度"做心理换算)。
+var sourceMetricNoun = map[string]string{
+	"zhihu_hot":        "最热",
+	"bilibili_popular": "最高",
+}
+
+// buildSummaryContent 拼装摘要文本。stats 为空返回空串,调用方负责跳过。
+func buildSummaryContent(stats []SourceStat) string {
+	if len(stats) == 0 {
+		return ""
+	}
+	total := 0
+	for _, s := range stats {
+		total += s.Count
+	}
+
+	// 头部:总数 + 各源细分(按 stats 顺序,即 count 降序)
+	parts := []string{fmt.Sprintf("📊 今日 %d 条", total)}
+	if len(stats) > 1 {
+		breakdown := make([]string, 0, len(stats))
+		for _, s := range stats {
+			label := sourceLabels[s.SourceKey]
+			if label == "" {
+				label = s.SourceKey
+			}
+			breakdown = append(breakdown, fmt.Sprintf("%s %d", label, s.Count))
+		}
+		parts[0] += " (" + strings.Join(breakdown, " / ") + ")"
+	}
+
+	// 每个源的 Top1
+	for _, s := range stats {
+		if s.TopTitle == "" {
+			continue
+		}
+		label := sourceLabels[s.SourceKey]
+		if label == "" {
+			label = s.SourceKey
+		}
+		metric := sourceMetricNoun[s.SourceKey]
+		if metric == "" {
+			metric = "最热"
+		}
+		title := truncateRunes(s.TopTitle, 22)
+		seg := fmt.Sprintf("%s%s「%s」", label, metric, title)
+		if s.TopHeat != "" {
+			seg += " " + s.TopHeat
+		}
+		parts = append(parts, seg)
+	}
+
+	return strings.Join(parts, " · ")
+}
+
+// truncateRunes 按 rune 数截断,超出补省略号。中英文都按 1 算长度。
+func truncateRunes(s string, max int) string {
+	r := []rune(s)
+	if len(r) <= max {
+		return s
+	}
+	return string(r[:max]) + "…"
 }
 
 // runDigestJob 触发一次每日精选邮件发送。失败仅记日志,不影响下次 cron。

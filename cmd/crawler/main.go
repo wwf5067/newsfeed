@@ -75,7 +75,7 @@ func main() {
 	runner := crawler.NewRunner(
 		log, repo, announcementsRepo,
 		cfg.RetentionDays,
-		cfg.QuotesSchedule,
+		cfg.SummarySchedule,
 		digestJob, cfg.DigestSchedule,
 		subscribeMatcher,
 	)

@@ -83,3 +83,58 @@ func (r *Repository) PurgeOldArticles(ctx context.Context, days int) (int64, err
 	}
 	return tag.RowsAffected(), nil
 }
+
+// SourceStat 单个 source 的当日统计:总数 + 最热条目。
+type SourceStat struct {
+	SourceKey string
+	Count     int
+	TopTitle  string
+	TopHeat   string // 源原文文本(如 "571 万热度");为空时调用方决定要不要兜底
+}
+
+// TodayStatsBySource 按"今日"(NOW() 当地时区 0 点起)统计每个源的文章数 + 该源最热一条。
+// 用于 daily summary 公告生成。最热口径:heat_value 降序;并列时 fetched_at 倒序。
+//
+// 数据量小(单日 100~200 条),用 LATERAL 风格的子查询直接出结果,不必优化。
+func (r *Repository) TodayStatsBySource(ctx context.Context) ([]SourceStat, error) {
+	const q = `
+WITH today AS (
+    SELECT source_key, title, heat, heat_value, fetched_at
+    FROM articles
+    WHERE fetched_at >= date_trunc('day', NOW())
+)
+SELECT
+    t.source_key,
+    COUNT(*) AS cnt,
+    (
+        SELECT title FROM today AS x
+        WHERE x.source_key = t.source_key
+        ORDER BY heat_value DESC NULLS LAST, fetched_at DESC
+        LIMIT 1
+    ) AS top_title,
+    (
+        SELECT COALESCE(heat, '') FROM today AS x
+        WHERE x.source_key = t.source_key
+        ORDER BY heat_value DESC NULLS LAST, fetched_at DESC
+        LIMIT 1
+    ) AS top_heat
+FROM today AS t
+GROUP BY t.source_key
+ORDER BY cnt DESC
+`
+	rows, err := r.pool.Query(ctx, q)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []SourceStat
+	for rows.Next() {
+		var s SourceStat
+		if err := rows.Scan(&s.SourceKey, &s.Count, &s.TopTitle, &s.TopHeat); err != nil {
+			return nil, err
+		}
+		out = append(out, s)
+	}
+	return out, rows.Err()
+}

@@ -34,8 +34,9 @@ type Config struct {
 	BilibiliEnabled  bool
 	BilibiliSchedule string // cron 表达式(支持秒),默认 30 分钟一次
 
-	// 每日名言 job:从内置库随机选 2 条以 announcements 形式发布
-	QuotesSchedule string // cron 表达式(支持秒),默认每天 8:00
+	// 今日数据摘要 job:每 30 分钟更新一条 announcements,内容为今日抓取统计。
+	// 历史:此前是"每日名言",故环境变量旧名 QUOTES_SCHEDULE 仍然兼容(降级回退)。
+	SummarySchedule string // cron 表达式(支持秒),默认 30 分钟一次
 
 	// 每日精选邮件 job:把 top10 热门发到指定邮箱。
 	// SMTPHost 空时该 job 不注册,crawler 仍正常启动。
@@ -69,8 +70,10 @@ func Load() (*Config, error) {
 		ZhihuSchedule:    getEnv("ZHIHU_SCHEDULE", "0 */30 * * * *"),
 		BilibiliEnabled:  strings.EqualFold(os.Getenv("BILIBILI_ENABLED"), "true"),
 		BilibiliSchedule: getEnv("BILIBILI_SCHEDULE", "0 */30 * * * *"),
-		QuotesSchedule:   getEnv("QUOTES_SCHEDULE", "0 0 8 * * *"),
-		DigestSchedule:   getEnv("DIGEST_SCHEDULE", "0 0 8 * * *"),
+		// SUMMARY_SCHEDULE 为新名字,QUOTES_SCHEDULE 是旧名字保留兼容,
+		// 都没设时默认每 30 分钟一次,与抓取节奏一致。
+		SummarySchedule: getEnv("SUMMARY_SCHEDULE", getEnv("QUOTES_SCHEDULE", "0 */30 * * * *")),
+		DigestSchedule:  getEnv("DIGEST_SCHEDULE", "0 0 8 * * *"),
 		SMTPHost:         os.Getenv("SMTP_HOST"),
 		SMTPPort:         getEnvInt("SMTP_PORT", 465),
 		SMTPUser:         os.Getenv("SMTP_USER"),

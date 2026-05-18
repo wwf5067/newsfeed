@@ -74,8 +74,9 @@ services:
       # B 站热门视频源:默认 false,需要在 .env 显式 BILIBILI_ENABLED=true 才启用
       BILIBILI_ENABLED: ${BILIBILI_ENABLED:-false}
       BILIBILI_SCHEDULE: ${BILIBILI_SCHEDULE:-0 */30 * * * *}
-      # 每日名言 job(crawler 内,默认每天 8:00)
-      QUOTES_SCHEDULE: ${QUOTES_SCHEDULE:-0 0 8 * * *}
+      # 今日数据摘要 job(默认 30 分钟一次,与抓取节奏一致)
+      # 旧名 QUOTES_SCHEDULE 仍兼容,SUMMARY_SCHEDULE 优先
+      SUMMARY_SCHEDULE: ${SUMMARY_SCHEDULE:-${QUOTES_SCHEDULE:-0 */30 * * * *}}
       # 每日精选邮件 job(SMTP_HOST/DIGEST_TO 任一为空则不启用)
       DIGEST_SCHEDULE: ${DIGEST_SCHEDULE:-0 0 8 * * *}
       SMTP_HOST: ${SMTP_HOST:-}
