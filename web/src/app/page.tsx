@@ -244,25 +244,33 @@ function TopicGroup({
 
       {/* 文章列表(紧凑) */}
       <div className="border-t border-zinc-100 dark:border-zinc-800">
-        {displayArticles.map((a) => (
-          <Link
-            key={a.id}
-            href={`/article?id=${a.id}`}
-            className="flex items-center gap-3 border-b border-zinc-50 px-4 py-2.5 transition last:border-b-0 hover:bg-zinc-50 dark:border-zinc-800/50 dark:hover:bg-zinc-800/50"
-          >
-            <span className="min-w-0 flex-1 truncate text-sm text-zinc-800 dark:text-zinc-200">
-              {a.title}
-            </span>
-            <span className="shrink-0 text-[11px] text-zinc-400">
-              {SOURCE_LABELS[a.source_key] ?? a.source_key}
-            </span>
-            {(a.heat || a.heat_value > 0) && (
-              <span className="shrink-0 text-[11px] font-medium tabular-nums text-red-500 dark:text-red-400">
-                {a.heat || formatHeat(a.heat_value)}
+        {displayArticles.map((a) => {
+          const isNew = a.prev_heat_value === 0 && a.heat_value > 0;
+          return (
+            <Link
+              key={a.id}
+              href={`/article?id=${a.id}`}
+              className="flex items-center gap-3 border-b border-zinc-50 px-4 py-2.5 transition last:border-b-0 hover:bg-zinc-50 dark:border-zinc-800/50 dark:hover:bg-zinc-800/50"
+            >
+              <span className="min-w-0 flex-1 truncate text-sm text-zinc-800 dark:text-zinc-200">
+                {a.title}
               </span>
-            )}
-          </Link>
-        ))}
+              {isNew && (
+                <span className="shrink-0 rounded-full bg-red-600 px-1.5 py-0.5 text-[9px] font-bold leading-none text-white">
+                  NEW
+                </span>
+              )}
+              <span className="shrink-0 text-[11px] text-zinc-400">
+                {SOURCE_LABELS[a.source_key] ?? a.source_key}
+              </span>
+              {(a.heat || a.heat_value > 0) && (
+                <span className="shrink-0 text-[11px] font-medium tabular-nums text-red-500 dark:text-red-400">
+                  {a.heat || formatHeat(a.heat_value)}
+                </span>
+              )}
+            </Link>
+          );
+        })}
       </div>
 
       {/* 展开/收起 + 关联词 */}
@@ -300,10 +308,15 @@ function TopicGroup({
 // ======================== Compact Article Row ========================
 
 function ArticleRow({ article, index }: { article: Article; index: number }) {
+  const isNew = article.prev_heat_value === 0 && article.heat_value > 0;
+  const hasTrend = !isNew && article.prev_heat_value > 0 && article.heat_value > 0 && article.heat_value !== article.prev_heat_value;
+  const diff = article.heat_value - article.prev_heat_value;
+  const up = diff > 0;
+
   return (
     <Link
       href={`/article?id=${article.id}`}
-      className="flex items-center gap-3 rounded-md px-3 py-2 transition hover:bg-zinc-50 dark:hover:bg-zinc-800/50"
+      className="flex items-center gap-3 border-b border-zinc-50 px-3 py-2.5 transition last:border-b-0 hover:bg-zinc-50 dark:border-zinc-800/50 dark:hover:bg-zinc-800/50"
     >
       <span className="shrink-0 font-mono text-[11px] text-zinc-300 tabular-nums dark:text-zinc-600">
         {String(index + 1).padStart(2, "0")}
@@ -311,6 +324,11 @@ function ArticleRow({ article, index }: { article: Article; index: number }) {
       <span className="min-w-0 flex-1 truncate text-sm text-zinc-800 dark:text-zinc-200">
         {article.title}
       </span>
+      {isNew && (
+        <span className="shrink-0 rounded-full bg-red-600 px-1.5 py-0.5 text-[9px] font-bold leading-none text-white">
+          NEW
+        </span>
+      )}
       <span className="shrink-0 text-[11px] text-zinc-400">
         {SOURCE_LABELS[article.source_key] ?? article.source_key}
       </span>
@@ -320,6 +338,11 @@ function ArticleRow({ article, index }: { article: Article; index: number }) {
       {(article.heat || article.heat_value > 0) && (
         <span className="shrink-0 text-[11px] font-medium tabular-nums text-red-500 dark:text-red-400">
           {article.heat || formatHeat(article.heat_value)}
+          {hasTrend && (
+            <span className={up ? " text-emerald-500" : " text-zinc-400"}>
+              {" "}{up ? "↑" : "↓"}{formatHeat(Math.abs(diff))}
+            </span>
+          )}
         </span>
       )}
     </Link>
@@ -400,9 +423,12 @@ export default function Home() {
     return () => { cancelled = true; clearInterval(timer); };
   }, [trackerWindow, debouncedQ]);
 
-  // 把文章按话题分组
+  // 是否为"全部"视图(话题聚合模式),具体源 Tab 则用时间流
+  const isTopicView = source === "" && !debouncedQ;
+
+  // 话题聚合:仅全部视图时生效
   const { grouped, ungrouped } = useMemo(() => {
-    if (topics.length === 0 || debouncedQ) {
+    if (!isTopicView || topics.length === 0) {
       return { grouped: [] as { topic: TrackerTopic; articles: Article[] }[], ungrouped: articles };
     }
 
@@ -423,7 +449,7 @@ export default function Home() {
 
     const ungrouped = articles.filter((a) => !usedIds.has(a.id));
     return { grouped, ungrouped };
-  }, [articles, topics, debouncedQ]);
+  }, [articles, topics, isTopicView]);
 
   const handleSourceChange = (key: string) => {
     if (source === key) return;
@@ -478,8 +504,8 @@ export default function Home() {
           placeholder="搜索…"
           className="ml-auto min-w-0 flex-1 rounded-md border border-zinc-200 bg-white px-3 py-1 text-sm outline-none placeholder:text-zinc-400 focus:border-zinc-400 dark:border-zinc-800 dark:bg-zinc-900 dark:focus:border-zinc-600"
         />
-        {/* 时间窗口(话题聚合维度) */}
-        {!debouncedQ && (
+        {/* 时间窗口(仅全部Tab话题聚合模式显示) */}
+        {source === "" && !debouncedQ && (
           <div className="flex gap-0.5">
             {[6, 24, 72].map((w) => (
               <button
@@ -514,37 +540,49 @@ export default function Home() {
         </div>
       )}
 
-      {/* 话题聚合区 */}
-      {grouped.length > 0 && (
-        <div className="mb-6 space-y-4">
-          {grouped.map(({ topic, articles: topicArticles }) => (
-            <TopicGroup
-              key={`${topic.kind}:${topic.label}`}
-              topic={topic}
-              articles={topicArticles}
-              windowHours={trackerWindow}
-              onSearch={handleSearch}
-            />
-          ))}
-        </div>
-      )}
-
-      {/* 未归入话题的散装文章 */}
-      {ungrouped.length > 0 && (
-        <div>
+      {isTopicView ? (
+        /* ========== 全部Tab: 话题聚合视图 ========== */
+        <>
           {grouped.length > 0 && (
-            <div className="mb-3 flex items-center gap-3">
-              <div className="h-px flex-1 bg-zinc-200 dark:bg-zinc-800" />
-              <span className="text-xs text-zinc-400">其他热门</span>
-              <div className="h-px flex-1 bg-zinc-200 dark:bg-zinc-800" />
+            <div className="mb-6 space-y-4">
+              {grouped.map(({ topic, articles: topicArticles }) => (
+                <TopicGroup
+                  key={`${topic.kind}:${topic.label}`}
+                  topic={topic}
+                  articles={topicArticles}
+                  windowHours={trackerWindow}
+                  onSearch={handleSearch}
+                />
+              ))}
             </div>
           )}
+
+          {ungrouped.length > 0 && (
+            <div>
+              {grouped.length > 0 && (
+                <div className="mb-3 flex items-center gap-3">
+                  <div className="h-px flex-1 bg-zinc-200 dark:bg-zinc-800" />
+                  <span className="text-xs text-zinc-400">其他热门</span>
+                  <div className="h-px flex-1 bg-zinc-200 dark:bg-zinc-800" />
+                </div>
+              )}
+              <div className="rounded-lg border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900">
+                {ungrouped.map((a, i) => (
+                  <ArticleRow key={a.id} article={a} index={i} />
+                ))}
+              </div>
+            </div>
+          )}
+        </>
+      ) : (
+        /* ========== 知乎/B站/搜索: 按时间排序的紧凑列表 ========== */
+        articles.length > 0 && (
           <div className="rounded-lg border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900">
-            {ungrouped.map((a, i) => (
+            {articles.map((a, i) => (
               <ArticleRow key={a.id} article={a} index={i} />
             ))}
           </div>
-        </div>
+        )
       )}
 
       {/* 加载更多 */}
