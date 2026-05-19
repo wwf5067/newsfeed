@@ -881,8 +881,9 @@ export default function Home() {
         )
       )}
 
-      {/* 加载更多 */}
-      {hasMore && !error && (
+      {/* 加载更多 — 只在显示文章列表的视图(知乎/百度/微博 tab + 搜索)出现。
+          全部 tab 是话题聚合视图,articles 仅用作分组输入,加载更多没意义。 */}
+      {!isTopicView && hasMore && !error && (
         <div className="mt-6 flex justify-center">
           <button
             type="button"
