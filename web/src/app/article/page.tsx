@@ -34,6 +34,17 @@ type HeatPoint = {
   captured_at: string;
 };
 
+// RelatedItem 来自 /api/v1/trackers/storyline 的 items 子集。
+// 字段子集即可,详情页只展示标题/源/热度/时间。
+type RelatedItem = {
+  id: number;
+  title: string;
+  source_key: string;
+  heat: string;
+  heat_value: number;
+  published_at: string;
+};
+
 const SOURCE_LABELS: Record<string, string> = {
   zhihu_hot: "知乎",
   bilibili_popular: "B站",
@@ -147,6 +158,7 @@ function ArticleContent() {
   const [article, setArticle] = useState<Article | null>(null);
   const [history, setHistory] = useState<HeatPoint[]>([]);
   const [keywords, setKeywords] = useState<string[]>([]);
+  const [related, setRelated] = useState<RelatedItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -198,6 +210,32 @@ function ArticleContent() {
       cancelled = true;
     };
   }, [id]);
+
+  // 拿到 keywords[0] 后,拉同主题的 storyline 取前几条作为"相关文章"。
+  // - keywords[0] 后端已经按 entity 优先排:有 entity 的话第一个就是 entity
+  // - storyline 用 30 天 (720h) 窗口,跟实体页默认一致
+  // - 过滤掉本文自己,展示前 5 条;空结果不渲染该区块
+  // - keywords 为空 / 接口失败都静默降级,不影响主路径
+  useEffect(() => {
+    if (!article || keywords.length === 0) return;
+    let cancelled = false;
+    const term = keywords[0];
+    (async () => {
+      try {
+        const params = new URLSearchParams({ term, window: "720" });
+        const res = await fetch(`/api/v1/trackers/storyline?${params.toString()}`, { cache: "no-store" });
+        if (!res.ok) return;
+        const data: { items?: RelatedItem[] } = await res.json();
+        const items = (data.items ?? []).filter((it) => it.id !== article.id).slice(0, 5);
+        if (!cancelled) setRelated(items);
+      } catch {
+        // 静默降级
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [article, keywords]);
 
   // 动态设置标签页 title(静态导出限制,无法用 generateMetadata,改用 client-side)
   useEffect(() => {
@@ -359,6 +397,46 @@ function ArticleContent() {
             {article.url}
           </div>
         </div>
+
+        {related.length > 0 && (
+          <div className="mt-6 border-t border-zinc-200 pt-4 dark:border-zinc-800">
+            <div className="mb-3 flex items-center justify-between">
+              <h2 className="text-sm font-medium text-zinc-700 dark:text-zinc-300">
+                相关文章
+              </h2>
+              {keywords.length > 0 && (
+                <Link
+                  href={`/tracker?term=${encodeURIComponent(keywords[0])}&window=720`}
+                  className="text-xs text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100"
+                >
+                  查看全部 →
+                </Link>
+              )}
+            </div>
+            <ul className="space-y-2">
+              {related.map((item) => (
+                <li key={item.id}>
+                  <Link
+                    href={`/article?id=${item.id}`}
+                    className="block rounded-md border border-zinc-200 bg-zinc-50 px-3 py-2 transition hover:border-zinc-300 hover:bg-white dark:border-zinc-800 dark:bg-zinc-950 dark:hover:border-zinc-700 dark:hover:bg-zinc-900"
+                  >
+                    <div className="text-sm leading-snug text-zinc-900 dark:text-zinc-100">
+                      {item.title}
+                    </div>
+                    <div className="mt-1 flex flex-wrap gap-x-3 text-[11px] text-zinc-500">
+                      <span>{SOURCE_LABELS[item.source_key] ?? item.source_key}</span>
+                      {(item.heat || item.heat_value > 0) && (
+                        <span className="font-medium text-red-500 tabular-nums dark:text-red-400">
+                          {item.heat || item.heat_value.toLocaleString()}
+                        </span>
+                      )}
+                    </div>
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
       </article>
     </main>
   );
