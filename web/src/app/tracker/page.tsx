@@ -25,6 +25,7 @@ type TrackerStorylineResp = {
   }[];
   momentum: "up" | "flat" | "down";
   score_delta: number;
+  new_count: number; // 窗口内新出现的文章数,用于 chip 展示"新增 N 条"
   total_articles: number;
 };
 
@@ -332,10 +333,12 @@ function TrackerPageContent() {
             </p>
           </div>
           <div className="flex flex-wrap gap-2 text-xs">
-            {/* 近 30 分钟热度变化:score_delta = sum(heat - prev_heat),即所有相关文章
-                "最近一次抓取相比上一次"的热度增量累加。抓取间隔是 30 分钟,所以
-                字面就是"近 30 分钟内这个实体相关的总热度变化"。
-                momentum 是基于 score_delta 推断的方向(已隐式包含在箭头里,不再单列)。 */}
+            {/* 窗口内真实热度变化 + 新增文章数。
+                后端用 article_heat_snapshots 算"窗口起点 vs 当前"的真实增量,
+                而非旧实现的"绝对热度累加",所以跟所选窗口对齐(24h 看 24h 内,
+                30d 看 30d 内),而且能正常出现 down/flat。
+                momentum: up 严格要求 score_delta>0 AND new_count>0;down 只要
+                score_delta<0 即可;箭头自带方向所以不再单列 momentum 文字。 */}
             {data.score_delta !== 0 && (
               <span
                 className={
@@ -344,10 +347,18 @@ function TrackerPageContent() {
                     ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300"
                     : "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400")
                 }
-                title="所有相关文章近一次抓取相比上一次的热度增量累加(抓取间隔 30 分钟)"
+                title={`${windowLabel(data.window.hours)}内,所有相关文章的热度净变化(基于 snapshot 首尾差)`}
               >
-                近 30 分钟 {formatSignedHeat(data.score_delta)}{" "}
+                {windowLabel(data.window.hours)} {formatSignedHeat(data.score_delta)}{" "}
                 {data.score_delta > 0 ? "↑" : "↓"}
+              </span>
+            )}
+            {data.new_count > 0 && (
+              <span
+                className="rounded-full bg-blue-100 px-3 py-1 text-blue-700 dark:bg-blue-950 dark:text-blue-300"
+                title={`${windowLabel(data.window.hours)}内新出现的相关文章数`}
+              >
+                新增 {data.new_count} 条
               </span>
             )}
             <button

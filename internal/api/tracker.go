@@ -57,7 +57,8 @@ type trackerStorylineResp struct {
 	Sources       []trackerSourceStat `json:"sources"`
 	Items         []trackerArticleRef `json:"items"`
 	Momentum      string              `json:"momentum"`
-	ScoreDelta    int64               `json:"score_delta"`
+	ScoreDelta    int64               `json:"score_delta"` // 窗口内真实热度净增(基于 snapshot,跟 window 对齐)
+	NewCount      int                 `json:"new_count"`   // 窗口内新出现的文章数(baseline snapshot 不存在)
 	TotalArticles int                 `json:"total_articles"`
 }
 
@@ -808,11 +809,19 @@ func scoreArticle(article model.Article) int64 {
 	return 10_000
 }
 
-func detectMomentum(scoreDelta int64, countDelta int) string {
-	if scoreDelta > 0 || countDelta > 0 {
+// detectMomentum 严格判断:
+// - up:热度有净增 AND 窗口内有新增文章(两条都满足才能判"升温")
+// - down:热度净降(不要求 newCount,跌就是跌)
+// - flat:其余(纯新增没热度上升,或纯热度上升没新增)
+//
+// 历史:旧实现用 OR — score_delta>0 || count_delta>0 都判 up,导致几乎不可能 down。
+// 配合"acc.Score 是绝对值累加"的 bug,长窗口下永远升温。改 AND 后语义严格,
+// 配合 GetWindowDeltas 的真实增量才有意义。
+func detectMomentum(scoreDelta int64, newCount int) string {
+	if scoreDelta > 0 && newCount > 0 {
 		return "up"
 	}
-	if scoreDelta < 0 || countDelta < 0 {
+	if scoreDelta < 0 {
 		return "down"
 	}
 	return "flat"
@@ -855,15 +864,22 @@ func flattenTrackerTerms(in map[string]struct{}, limit int) []string {
 	return out
 }
 
-// buildTrackerStoryline 由调用方负责把 articles 过滤为"已包含 term"。
-// 这里只做聚合统计(sources / momentum / summary)和组装响应。
+// buildTrackerStoryline 组装实体页响应。
 //
-// 旧实现内部还会再调一次 filterArticlesByTerm 兜底(in-memory 多别名匹配),
-// 但现在数据来自 ListArticlesByTerms 的 SQL 直查,已是精确匹配,不必重复过滤。
-func buildTrackerStoryline(term string, articles []model.Article, windowHours int) trackerStorylineResp {
+// articles 由调用方过滤为"已包含 term"(SQL 直查)。
+// deltas 是窗口内真实热度增量(每篇文章 captured_at 之前最近 snapshot 与 current 的差),
+// 用于精确算 score_delta / momentum / new_count;调用方负责调 GetWindowDeltas 提供。
+//
+// deltas == nil 时降级:scoreDelta=0、newCount=0、momentum=flat,前端 chip 不显示。
+// 这样 snapshot 表查询失败不会让整个 storyline 接口报错。
+func buildTrackerStoryline(
+	term string,
+	articles []model.Article,
+	deltas []WindowDelta,
+	windowHours int,
+) trackerStorylineResp {
 	items := make([]trackerArticleRef, 0, len(articles))
 	sources := map[string]int{}
-	var scoreDelta int64
 	for _, article := range articles {
 		items = append(items, trackerArticleRef{
 			ID:          article.ID,
@@ -874,17 +890,22 @@ func buildTrackerStoryline(term string, articles []model.Article, windowHours in
 			PublishedAt: article.PublishedAt,
 		})
 		sources[article.SourceKey]++
-		scoreDelta += article.HeatValue - article.PrevHeatValue
+	}
+
+	// 累加窗口内真实热度增量 + 数窗口内新文章数。
+	// deltas 跟 articles 是同一个 id 集合(handler 一次性传入),用 map 也行,
+	// 这里直接遍历两次累加,N <= 200 性能完全无所谓。
+	var scoreDelta int64
+	newCount := 0
+	for _, d := range deltas {
+		scoreDelta += d.Delta
+		if d.IsNewInWindow {
+			newCount++
+		}
 	}
 
 	summary := buildTrackerSummary(term, articles, windowHours)
-	momentum := "flat"
-	if len(articles) >= 2 {
-		// SQL 已按 fetched_at DESC,articles[0] 是最新,len-1 是最旧
-		first := articles[len(articles)-1]
-		last := articles[0]
-		momentum = detectMomentum(last.HeatValue-first.HeatValue, len(articles)-1)
-	}
+	momentum := detectMomentum(scoreDelta, newCount)
 
 	return trackerStorylineResp{
 		Term:          term,
@@ -894,6 +915,7 @@ func buildTrackerStoryline(term string, articles []model.Article, windowHours in
 		Items:         items,
 		Momentum:      momentum,
 		ScoreDelta:    scoreDelta,
+		NewCount:      newCount,
 		TotalArticles: len(items),
 	}
 }

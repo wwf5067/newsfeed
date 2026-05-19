@@ -203,7 +203,24 @@ func (h *Handler) GetTrackerStoryline(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, buildTrackerStoryline(term, articles, window))
+	// 算窗口起点:window=0(全部)时传零值,GetWindowDeltas 会把所有文章算成"窗口内新增"。
+	var windowStart time.Time
+	if window > 0 {
+		windowStart = time.Now().Add(-time.Duration(window) * time.Hour)
+	}
+	ids := make([]int64, 0, len(articles))
+	for _, a := range articles {
+		ids = append(ids, a.ID)
+	}
+	deltas, derr := h.repo.GetWindowDeltas(r.Context(), ids, windowStart)
+	if derr != nil {
+		// snapshot 查询失败不挡主路径,降级成空 deltas:storyline 仍能返回文章列表,
+		// 只是 score_delta=0、momentum=flat、new_count=0,前端 chip 不显示。
+		h.logger.Warn("get window deltas failed, degrading to empty", "term", term, "err", derr)
+		deltas = nil
+	}
+
+	writeJSON(w, http.StatusOK, buildTrackerStoryline(term, articles, deltas, window))
 }
 
 // expandTermAliases 把 term 通过 lexicon 展开为所有别名;非 lexicon 词退化为 [term]。

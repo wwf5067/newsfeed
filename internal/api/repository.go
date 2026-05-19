@@ -405,3 +405,77 @@ ORDER BY priority DESC, created_at DESC
 	}
 	return out, rows.Err()
 }
+
+// WindowDelta 一篇文章在 [windowStart, now] 时间窗口内的真实热度增量。
+//
+// CurrentHeat 来自 articles 表(等同于最新一次抓取的 heat_value)。
+// BaselineHeat 是窗口起点之前最近一次的 snapshot 值;窗口起点之前没有 snapshot
+// (即文章是在窗口内才首次抓到)时,BaselineHeat = 0,IsNewInWindow = true。
+//
+// Delta = CurrentHeat - BaselineHeat,可正可负(虽然热度通常单调递增,但快照
+// 噪声 + 平台调整热度计算后可能下降)。
+type WindowDelta struct {
+	ArticleID     int64
+	CurrentHeat   int64
+	BaselineHeat  int64
+	Delta         int64
+	IsNewInWindow bool
+}
+
+// GetWindowDeltas 给定文章 id 列表和窗口起点,一次 SQL 拿所有文章的
+// "窗口内真实热度增量",用于实体页 momentum / score_delta 的精确计算。
+//
+// windowStart 取零值(time.Time{})表示"全部时间":此时所有文章的 baseline
+// 都找不到,Delta 等于 CurrentHeat,IsNewInWindow=true。语义上"全部时间内
+// 增长 = 当前热度",合理。
+//
+// SQL 用 LATERAL 子查询,对每篇文章独立走 (article_id, captured_at DESC)
+// 索引,O(N×log) 而非全表扫。
+func (r *Repository) GetWindowDeltas(
+	ctx context.Context,
+	articleIDs []int64,
+	windowStart time.Time,
+) ([]WindowDelta, error) {
+	if len(articleIDs) == 0 {
+		return nil, nil
+	}
+
+	// windowStart 零值时,把它设成一个非常早的时间,让 baseline 子查询永远找不到。
+	// 这样 IsNewInWindow=true、Delta=CurrentHeat,语义对应"全部时间"。
+	if windowStart.IsZero() {
+		windowStart = time.Unix(0, 0) // 1970-01-01,任何 snapshot 都晚于它
+	}
+
+	const q = `
+SELECT
+    a.id AS article_id,
+    a.heat_value AS current_heat,
+    COALESCE(baseline.heat_value, 0) AS baseline_heat,
+    (a.heat_value - COALESCE(baseline.heat_value, 0)) AS delta,
+    (baseline.heat_value IS NULL) AS is_new
+FROM articles a
+LEFT JOIN LATERAL (
+    SELECT heat_value
+    FROM article_heat_snapshots
+    WHERE article_id = a.id AND captured_at <= $1
+    ORDER BY captured_at DESC
+    LIMIT 1
+) baseline ON TRUE
+WHERE a.id = ANY($2::bigint[])
+`
+	rows, err := r.pool.Query(ctx, q, windowStart, articleIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make([]WindowDelta, 0, len(articleIDs))
+	for rows.Next() {
+		var d WindowDelta
+		if err := rows.Scan(&d.ArticleID, &d.CurrentHeat, &d.BaselineHeat, &d.Delta, &d.IsNewInWindow); err != nil {
+			return nil, err
+		}
+		out = append(out, d)
+	}
+	return out, rows.Err()
+}
