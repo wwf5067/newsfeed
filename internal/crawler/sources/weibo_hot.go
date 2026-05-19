@@ -198,8 +198,16 @@ func parseWeiboHotHTML(html string) []model.Article {
 			}
 		}
 
-		// 构造文章 URL
-		webURL := "https://s.weibo.com" + href
+		// 构造稳定 URL 用于 UPSERT 去重。
+		// 直接拼接 raw href 会包含 band_rank=N 和 Refer 等参数,排名变化时 URL 变,
+		// 同一热搜被存成多条。这里只保留 q 参数(关键词本身就是稳定 ID),
+		// 让"#话题#"排名怎么变都是同一行。
+		query := extractWeiboQuery(href)
+		if query == "" {
+			// 极端 fallback:href 没 q 参数,跳过这条避免脏数据
+			continue
+		}
+		webURL := "https://s.weibo.com/weibo?q=" + query
 
 		// 热度文本:用于前端显示
 		var heatDisplay string
@@ -233,6 +241,21 @@ func formatWeiboHeat(v int64) string {
 		return fmt.Sprintf("%.0f万", float64(v)/10000)
 	}
 	return strconv.FormatInt(v, 10)
+}
+
+// extractWeiboQuery 从 href 里把 q 参数原样取出来(还是 url-encoded 形态)。
+// 输入 "/weibo?q=%23xxx%23&t=31&band_rank=47" → 返回 "%23xxx%23"。
+// 拿 q 作为 UPSERT 去重 key,排除 band_rank/Refer 等不稳定参数。
+func extractWeiboQuery(href string) string {
+	idx := strings.Index(href, "q=")
+	if idx < 0 {
+		return ""
+	}
+	rest := href[idx+2:]
+	if amp := strings.Index(rest, "&"); amp >= 0 {
+		rest = rest[:amp]
+	}
+	return rest
 }
 
 func truncate(s string, n int) string {
