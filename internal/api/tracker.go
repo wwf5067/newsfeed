@@ -100,7 +100,10 @@ var (
 			`|[\p{Han}]{2,12}`,
 	)
 	trackerTitleSplitRegex = regexp.MustCompile(`[|｜/:：,，。！？!?()（）\[\]【】<>《》"“”‘’·]+`)
-	stopTokens             = map[string]struct{}{
+	// bookTitleRegex 提取《...》/「...」/『...』 内的作品名(电影/综艺/书/歌曲),
+	// 内容长度 1-20 字,无嵌套(子组只匹配非闭合括号字符)。
+	bookTitleRegex = regexp.MustCompile(`[《「『]([^》」』]{1,20})[》」』]`)
+	stopTokens     = map[string]struct{}{
 		"这个": {}, "那个": {}, "一个": {}, "一次": {}, "一些": {}, "一种": {},
 		"我们": {}, "你们": {}, "他们": {}, "大家": {}, "自己": {}, "别人": {},
 		"什么": {}, "哪些": {}, "怎么": {}, "如何": {}, "为什么": {}, "为何": {},
@@ -361,6 +364,31 @@ func extractTrackerCandidates(article model.Article) []trackerCandidate {
 
 	ordered := make([]string, 0, 8)
 	poolSeen := map[string]struct{}{}
+	// forcedEntities 由"被《》或【】明确包围的内容"组成,跳过 looksLikeEntity 的
+	// 启发式判定,直接标 entity。这样《给阿嬷的情书》《影·迷》这种作品名就算
+	// 没在词典里也能正确识别为 entity,而不是落到 keyword/被句子检测丢掉。
+	forcedEntities := map[string]struct{}{}
+
+	// -1. 《》/「」/『』 包围的内容预提取为高优先级 entity(电影/综艺/书名/作品名)。
+	//     trackerTitleSplitRegex 已经把这些括号当切分符,但切完只剩"裸内容",
+	//     在 ordered 里跟普通片段没区别 — 长度超过 8 字会被 looksLikeSentence 丢。
+	//     这里多走一遍正则把它们标成 forced entity,后面 shouldKeepTrackerToken
+	//     看到这个标记就跳过过滤。
+	for _, m := range bookTitleRegex.FindAllStringSubmatch(title, -1) {
+		if name := strings.TrimSpace(m[1]); name != "" {
+			normalized := canonicalizeTrackerToken(name)
+			if normalized == "" {
+				continue
+			}
+			// 即使被《》/「」包围,如果是套话(如「私生子」「姐妹关系」)或通用英文词,
+			// 也不应强制当 entity — 它们是引号引用,不是作品名。
+			if isGenericRoleToken(normalized) || isGenericEnglishWord(normalized) {
+				continue
+			}
+			forcedEntities[normalized] = struct{}{}
+			appendTrackerPool(&ordered, poolSeen, normalized)
+		}
+	}
 
 	// 0. 合称拆解:检测标题中的2字合称(美以/中美/俄乌等),展开为两个独立实体。
 	for abbrev, pair := range compoundGeoAbbrevs {
@@ -412,11 +440,12 @@ func extractTrackerCandidates(article model.Article) []trackerCandidate {
 
 	out := make([]trackerCandidate, 0, 6)
 	for _, label := range ordered {
-		if !shouldKeepTrackerToken(label) {
+		_, forced := forcedEntities[label]
+		if !forced && !shouldKeepTrackerToken(label) {
 			continue
 		}
 		kind := "keyword"
-		if looksLikeEntity(label) {
+		if forced || looksLikeEntity(label) {
 			kind = "entity"
 		}
 		related := []string{}
@@ -912,6 +941,12 @@ func looksLikeEntity(token string) bool {
 	if isGenericEnglishWord(token) || isAllGenericEnglishWords(token) {
 		return false
 	}
+	// 集数/赛事编号代号("G1"/"S22"/"E3"/"Ep5"),纯数字标记无独立辨识度。
+	// 只对"1-2 个英文字母 + 1-3 位数字"的孤立 token 生效,词典里的 NBA/F1/G7
+	// 等已经在函数开头被精确命中,不会到这一步。
+	if isEpisodeCode(token) {
+		return false
+	}
 	if strings.HasPrefix(token, "#") {
 		return true
 	}
@@ -995,7 +1030,7 @@ var dataLikePatterns = []*regexp.Regexp{
 	// 运动员数据描述:"文班亚马 41 分 24 篮板"
 	regexp.MustCompile(`.{2,8}\s*\d+\s*分\s*\d+\s*(篮板|助攻|抢断|盖帽|出场|首发)`),
 	// 系列赛代号:"西决G1" / "东决G3" / "总决赛G7"
-	regexp.MustCompile(`^.{2,4}决\s*G\d+$`),
+	regexp.MustCompile(`^.{1,4}决\s*G\d+$`),
 }
 
 func looksLikeDataLikePhrase(token string) bool {
@@ -1035,7 +1070,20 @@ var sentenceColloquialPrefixes = []string{
 	"学校", "司机", "妈妈", "爸爸", "老婆", "老公",
 	"小朋友", "外地朋友", "湖南人", "广东人", "北京人",
 	"但很", "依旧", "突然", "原来",
+	"给外地", "给本地", "给家里", "给朋友",
 }
+
+// sentenceCopulaInfixes 标题党"是 X"句式中间词。这些片段出现在 token 内
+// 通常意味着评论性/感叹性陈述,不是事件或实体。
+//
+// 例:"真诚是第一要素" / "我才是主角" / "其实是诈骗"
+var sentenceCopulaInfixes = []string{
+	"是第一", "是真的", "是最", "是最大", "竟然是", "其实是", "原来是", "才是真",
+}
+
+// sentenceFromToRegex 标题党"从 X 到 Y"句式("从黑马到大爆""从青铜到王者")。
+// 整体作为事件描述句子,无独立信息价值。
+var sentenceFromToRegex = regexp.MustCompile(`^从.{1,5}到.{1,5}`)
 
 // looksLikeSentence 判定 token 是否看起来是完整句子片段而非实体或短语。
 // 任一信号命中即认为是句子,应当从 keyword 候选中剔除:
@@ -1072,6 +1120,16 @@ func looksLikeSentence(token string) bool {
 			}
 		}
 	}
+	// 标题党"是 X"陈述句:中间含 sentenceCopulaInfixes 任一片段即丢
+	for _, c := range sentenceCopulaInfixes {
+		if strings.Contains(token, c) {
+			return true
+		}
+	}
+	// "从 X 到 Y" 句式
+	if sentenceFromToRegex.MatchString(token) {
+		return true
+	}
 	return false
 }
 
@@ -1083,6 +1141,9 @@ func shouldKeepTrackerToken(token string) bool {
 		return false
 	}
 	if isAllGenericEnglishWords(token) {
+		return false
+	}
+	if isEpisodeCode(token) {
 		return false
 	}
 	if looksLikeEntity(token) {
@@ -1138,6 +1199,15 @@ func isAllGenericEnglishWords(token string) bool {
 		}
 	}
 	return true
+}
+
+// episodeCodeRegex 匹配孤立的赛事/集数编号(G1/S22/E3/Ep5/EP10)。
+// 1-2 个英文字母 + 1-3 位数字,字母前后无其他内容。词典里的真实 entity
+// (NBA/F1/G7 国家集团 等)在 looksLikeEntity 顶部已精确命中,不会到这一步。
+var episodeCodeRegex = regexp.MustCompile(`^[A-Za-z]{1,2}\d{1,3}$`)
+
+func isEpisodeCode(token string) bool {
+	return episodeCodeRegex.MatchString(token)
 }
 
 func collectTrackerRelatedTerms(tokens []string, label string) []string {
