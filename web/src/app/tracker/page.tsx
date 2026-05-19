@@ -56,6 +56,11 @@ function formatHeat(v: number): string {
   return String(Math.round(v));
 }
 
+function formatSignedHeat(v: number): string {
+  if (!Number.isFinite(v) || v === 0) return "0";
+  return `${v > 0 ? "+" : "-"}${formatHeat(Math.abs(v))}`;
+}
+
 // 时间窗口选项。0 表示"全部",后端 sinceHours=0 不限时间。
 // 默认 720 小时 = 30 天 = 现行 retention 上限,等同于"自部署以来"。
 const WINDOW_OPTIONS: { hours: number; label: string }[] = [
@@ -326,6 +331,24 @@ function TrackerPageContent() {
             </p>
           </div>
           <div className="flex flex-wrap gap-2 text-xs">
+            {/* 近 30 分钟热度变化:score_delta = sum(heat - prev_heat),即所有相关文章
+                "最近一次抓取相比上一次"的热度增量累加。抓取间隔是 30 分钟,所以
+                字面就是"近 30 分钟内这个实体相关的总热度变化"。
+                momentum 是基于 score_delta 推断的方向(已隐式包含在箭头里,不再单列)。 */}
+            {data.score_delta !== 0 && (
+              <span
+                className={
+                  "rounded-full px-3 py-1 " +
+                  (data.score_delta > 0
+                    ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300"
+                    : "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400")
+                }
+                title="所有相关文章近一次抓取相比上一次的热度增量累加(抓取间隔 30 分钟)"
+              >
+                近 30 分钟 {formatSignedHeat(data.score_delta)}{" "}
+                {data.score_delta > 0 ? "↑" : "↓"}
+              </span>
+            )}
             <button
               type="button"
               onClick={handleSubscribe}
