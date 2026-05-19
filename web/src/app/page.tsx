@@ -108,7 +108,7 @@ const HEAT_ICONS: Record<string, { icon: string; label: string }> = {
 const SOURCE_FILTERS: { key: string; label: string }[] = [
   { key: "", label: "全部" },
   { key: "zhihu_hot", label: "知乎" },
-  { key: "bilibili_popular", label: "B站" },
+  // { key: "bilibili_popular", label: "B站" }, // 暂时屏蔽:内容以娱乐视频为主,与新闻聚合相关度低
   { key: "baidu_hot", label: "百度" },
 ];
 
@@ -462,7 +462,8 @@ function HotPanel({ zhihu, bilibili, baidu }: { zhihu: HotlistItem[]; bilibili: 
           ))}
         </>
       )}
-      {bilibili.length > 0 && (
+      {/* B站暂时屏蔽:娱乐内容为主,与新闻聚合相关度低。恢复时去掉 false && 即可 */}
+      {false && bilibili.length > 0 && (
         <>
           <div className="border-b border-zinc-50 border-t border-t-zinc-200 px-4 py-1 dark:border-zinc-800/60 dark:border-t-zinc-700">
             <span className="text-[11px] font-medium text-zinc-400">B站</span>
@@ -845,7 +846,7 @@ export default function Home() {
               ))}
             </div>
           )}
-          {(hotlist.zhihu.length > 0 || hotlist.bilibili.length > 0 || ungrouped.length > 0) && (
+          {(hotlist.zhihu.length > 0 || hotlist.baidu.length > 0 || ungrouped.length > 0) && (
             <>
               {grouped.length > 0 && (
                 <div className="mb-4 h-px bg-zinc-200 dark:bg-zinc-800" />
