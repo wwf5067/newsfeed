@@ -144,6 +144,24 @@ async function fetchHotlist(): Promise<HotlistResp> {
 
 // ======================== Formatters ========================
 
+// hanRuneCount 统计字符串中汉字个数(CJK 基本区 + 扩展A区)。
+// 对应后端 tracker.go 里的 hanRuneCount,用于判断短词。
+function hanRuneCount(s: string): number {
+  let count = 0;
+  for (const ch of s) {
+    const cp = ch.codePointAt(0) ?? 0;
+    if ((cp >= 0x4e00 && cp <= 0x9fff) || (cp >= 0x3400 && cp <= 0x4dbf)) count++;
+  }
+  return count;
+}
+
+// isShortCJKTerm 对应后端 filterWeakContentMatches 的判断条件:
+// 全是 ≤2 汉字、且不含 ASCII 字母 → 属于泛短词,仅 title 命中才算相关。
+function isShortCJKTerm(s: string): boolean {
+  if (/[a-zA-Z]/.test(s)) return false;
+  return hanRuneCount(s) <= 2;
+}
+
 function formatHeat(v: number): string {
   if (!Number.isFinite(v) || v <= 0) return "";
   if (v >= 1e8) {
@@ -623,14 +641,28 @@ export default function Home() {
       return { grouped: [] as { topic: TrackerTopic; articles: Article[] }[], ungrouped: articles };
     }
 
+    // 只使用 trackerWindow 窗口内抓取的文章参与分组,
+    // 与后端 /trackers 和 /trackers/storyline 使用同一数据集(均按 fetched_at 过滤),
+    // 保证首页分组结果与点进实体页后看到的内容一致。
+    const cutoff = Date.now() - trackerWindow * 3600 * 1000;
+    const windowed = articles.filter((a) => {
+      try { return new Date(a.fetched_at).getTime() >= cutoff; } catch { return true; }
+    });
+
     const usedIds = new Set<number>();
     const grouped: { topic: TrackerTopic; articles: Article[] }[] = [];
 
     for (const topic of topics) {
       const label = topic.label.toLowerCase();
-      const matched = articles.filter((a) => {
+      // 对短泛词(≤2 汉字且无英文字母,如"中国""美国")只匹配 title,
+      // 与后端 filterWeakContentMatches 保持一致,避免 content 偶然提及导致
+      // 首页把文章归入某话题、但点进实体页却看不见的不一致。
+      const titleOnly = isShortCJKTerm(label);
+      const matched = windowed.filter((a) => {
         if (usedIds.has(a.id)) return false;
-        const text = (a.title + " " + a.content).toLowerCase();
+        const titleLower = a.title.toLowerCase();
+        if (titleOnly) return titleLower.includes(label);
+        const text = (titleLower + " " + a.content.toLowerCase());
         return text.includes(label);
       });
       if (matched.length === 0) continue;
@@ -638,9 +670,9 @@ export default function Home() {
       grouped.push({ topic, articles: matched });
     }
 
-    const ungrouped = articles.filter((a) => !usedIds.has(a.id));
+    const ungrouped = windowed.filter((a) => !usedIds.has(a.id));
     return { grouped, ungrouped };
-  }, [articles, topics, isTopicView]);
+  }, [articles, topics, isTopicView, trackerWindow]);
 
   // 同源 Top 10 排名
   const topIdsBySource = useMemo(() => {
