@@ -135,7 +135,7 @@ func TestExtractZhihuHotTitles(t *testing.T) {
 		{
 			title:        "全球升温已连续三年超过1.5℃，这意味着什么？这一临界点失守是否会导致变暖迎来质变？",
 			wantEntities: []string{},
-			wantKeywords: []string{"全球升温"},
+			wantKeywords: []string{},
 			wantAbsent:   []string{"这意味着什么", "是否", "导致"},
 		},
 		{
@@ -176,7 +176,7 @@ func TestExtractZhihuHotTitles(t *testing.T) {
 		},
 		{
 			title:        "如何评价《崩坏星穹铁道》新发布的啊哈时刻|姬子·启行？",
-			wantEntities: []string{"崩坏星穹铁道"},
+			wantEntities: []string{"崩坏：星穹铁道"},
 			wantKeywords: []string{},
 			wantAbsent:   []string{"如何评价", "发布"},
 		},

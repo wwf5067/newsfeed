@@ -219,6 +219,11 @@ func (h *Handler) GetTrackerStoryline(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 过滤仅 content 命中的弱相关文章:如果 title 中完全不包含任何一个别名,
+	// 说明关联仅来自摘要偶然提及,降级排除(避免"手机店不卖新机"出现在"中国"实体下)。
+	// 保留 title 命中(score>=3) 或 content 命中且 title 也有部分匹配的文章。
+	articles = filterWeakContentMatches(articles, terms)
+
 	// 算窗口起点:window=0(全部)时传零值,GetWindowDeltas 会把所有文章算成"窗口内新增"。
 	var windowStart time.Time
 	if window > 0 {
@@ -401,4 +406,26 @@ func parseIntDefault(s string, def int) int {
 		return n
 	}
 	return def
+}
+
+// filterWeakContentMatches 过滤仅靠 content 匹配的弱相关文章。
+// 保留条件:title 中包含至少一个 term(不区分大小写)。
+// 只有 content 命中而 title 完全不含的文章被排除,避免噪声污染实体页。
+func filterWeakContentMatches(articles []model.Article, terms []string) []model.Article {
+	out := make([]model.Article, 0, len(articles))
+	for _, a := range articles {
+		titleLower := strings.ToLower(a.Title)
+		matched := false
+		for _, t := range terms {
+			needle := strings.ToLower(t)
+			if strings.Contains(titleLower, needle) {
+				matched = true
+				break
+			}
+		}
+		if matched {
+			out = append(out, a)
+		}
+	}
+	return out
 }

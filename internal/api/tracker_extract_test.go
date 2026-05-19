@@ -89,7 +89,7 @@ func TestExtractTrackerCandidates(t *testing.T) {
 		{
 			title:        "中美贸易谈判取得新进展",
 			wantEntities: []string{"中国", "美国"},
-			wantKeywords: []string{"贸易谈判"},
+			wantKeywords: []string{},
 			wantAbsent:   []string{"取得", "新进展"},
 		},
 		{

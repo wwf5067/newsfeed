@@ -1759,6 +1759,8 @@ func trackerTermMatchesArticle(term string, article model.Article) bool {
 		}
 		return false
 	}
+	// 匹配 title 或 content:title 是强信号,content 是弱信号(提升召回率)。
+	// 具体权重区分在 scoreTrackerTermMatch 中体现。
 	title := strings.ToLower(article.Title)
 	content := strings.ToLower(article.Content)
 	needle := strings.ToLower(term)
@@ -1773,6 +1775,7 @@ func scoreTrackerTermMatch(term string, article model.Article) int {
 	if term == "" {
 		return 0
 	}
+	// title 匹配权重 3(强信号),content 匹配权重 1(弱信号,提升召回)。
 	title := strings.ToLower(article.Title)
 	content := strings.ToLower(article.Content)
 	needle := strings.ToLower(term)

@@ -195,7 +195,8 @@ func (r *Repository) ListArticlesByTerms(
 		limit = 200
 	}
 
-	// 拼 (title ILIKE $1 OR content ILIKE $1 OR title ILIKE $2 OR ...)
+	// title 匹配为主,content 匹配为辅(提升召回率)。
+	// 实体提取基于 title,但 content 中命中同一实体说明文章确实相关,保留。
 	conds := make([]string, 0, len(terms)*2)
 	args := make([]any, 0, len(terms)+2)
 	for _, t := range terms {
