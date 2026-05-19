@@ -168,6 +168,7 @@ func extractJSONField(text, field string) string {
 func parseWeiboHotHTML(html string) []model.Article {
 	matches := weiboEntryRegex.FindAllStringSubmatch(html, -1)
 	articles := make([]model.Article, 0, len(matches))
+	now := time.Now()
 
 	for _, m := range matches {
 		if len(m) < 5 {
@@ -206,12 +207,20 @@ func parseWeiboHotHTML(html string) []model.Article {
 			heatDisplay = formatWeiboHeat(heatValue) + " · 排名" + rank
 		}
 
+		// PublishedAt 按 rank 偏移(rank=1 最热 → now;rank=2 → now-1s ...),
+		// 配合 crawler/repository.go 的 published_at COALESCE 锁定语义,
+		// 首次入库后永久不变,前端按 published_at DESC 即等价按热度 DESC。
+		// rank 解析失败兜底到 now(早期热搜或异常情况),不影响主流程。
+		rankNum, _ := strconv.Atoi(rank)
+		if rankNum < 1 {
+			rankNum = 1
+		}
 		articles = append(articles, model.Article{
 			URL:         webURL,
 			Title:       title,
 			Heat:        heatDisplay,
 			HeatValue:   heatValue,
-			PublishedAt: time.Now(),
+			PublishedAt: now.Add(-time.Duration(rankNum-1) * time.Second),
 		})
 	}
 

@@ -8,6 +8,7 @@ import (
 	"math/rand"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"time"
 
@@ -129,21 +130,35 @@ func (b *BaiduHot) Fetch(ctx context.Context) ([]model.Article, error) {
 		return nil, fmt.Errorf("baidu hot list empty: %w", crawler.ErrEmptyData)
 	}
 
+	// 先按 hot_score 倒序排,确保下面用 rank 偏移给 PublishedAt 时,热度高的在前。
+	// 排序的是 items 切片本身,不影响下游,但保证后面循环按热度顺序构造 article。
+	sort.SliceStable(items, func(i, j int) bool {
+		si, _ := strconv.ParseInt(items[i].HotScore, 10, 64)
+		sj, _ := strconv.ParseInt(items[j].HotScore, 10, 64)
+		return si > sj
+	})
+
 	articles := make([]model.Article, 0, len(items))
-	for _, it := range items {
+	now := time.Now()
+	for rank, it := range items {
 		score, _ := strconv.ParseInt(it.HotScore, 10, 64)
 
 		// 用关键词构造稳定 URL,确保同一热词多次抓取命中同一行(upsert 去重)。
 		// 不直接用 rawUrl 是因为其中可能含时间戳参数导致 URL 每次不同。
 		articleURL := "https://www.baidu.com/s?wd=" + url.QueryEscape(it.Word) + "&sa=top_hot"
 
+		// PublishedAt 按热度倒序赋值:rank 0(最热)= now,rank 1 = now-1s,以此类推。
+		// 配合 crawler/repository.go 的 published_at COALESCE 锁定语义,首次入库时间
+		// 永久保留,前端按 published_at DESC 排序就等价于按热度 DESC。
+		// 1 秒间隔够稀疏,避免同源同批次时间冲突;且总跨度 ~50 秒以内,不影响"最近"
+		// 时间过滤。
 		articles = append(articles, model.Article{
 			URL:         articleURL,
 			Title:       it.Word,
 			Content:     it.Desc,
 			Heat:        formatBaiduHeat(score),
 			HeatValue:   score,
-			PublishedAt: time.Now(),
+			PublishedAt: now.Add(-time.Duration(rank) * time.Second),
 		})
 	}
 	return articles, nil
