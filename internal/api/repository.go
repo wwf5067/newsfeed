@@ -168,7 +168,7 @@ LIMIT $2
 	return out, rows.Err()
 }
 
-// ListArticlesByTerms 按多个别名做 ILIKE OR 匹配,返回 fetched_at 倒序。
+// ListArticlesByTerms 按多个别名做 ILIKE OR 匹配,返回 published_at 倒序。
 //
 // 用于实体页聚合:从 lexicon 拿到某个 Label 的所有别名(如"特朗普 / Trump / trump / 川普"),
 // 一次 SQL 把全 30 天 retention 内匹配的文章捞出来,前端再做时间分组展示。
@@ -222,7 +222,7 @@ SELECT id, source_key, url, title, content, author,
        published_at, fetched_at
 FROM articles
 %s
-ORDER BY fetched_at DESC
+ORDER BY published_at DESC
 LIMIT $%d
 `, where, limitIdx)
 

@@ -630,21 +630,28 @@ export default function Home() {
   }, []);
 
   // 话题聚合分组
+  //
+  // 设计:一篇文章可以同时归到多个话题下(如"普京访华"既归"普京"也归"俄罗斯"
+  // 也归"中国")。早先版本用 usedIds 让"先匹配的话题独占文章",导致排在前面
+  // 的高频实体(如"中国")会把所有文章吸收,后面的实体(如"俄罗斯""普京")
+  // 看起来"没文章"被静默丢弃 — 用户在首页看不到这些实体。
+  // 现改为允许多重归属,信息更全;首页冗余文章是可接受代价(用户可以从不同
+  // 维度切入同一事件)。
   const { grouped, ungrouped } = useMemo(() => {
     if (!isTopicView || topics.length === 0) {
       return { grouped: [] as { topic: TrackerTopic; articles: Article[] }[], ungrouped: articles };
     }
 
     // 只使用 trackerWindow 窗口内抓取的文章参与分组,
-    // 与后端 /trackers 和 /trackers/storyline 使用同一数据集(均按 fetched_at 过滤),
+    // 与后端 /trackers 和 /trackers/storyline 使用同一数据集,
     // 保证首页分组结果与点进实体页后看到的内容一致。
     const cutoff = Date.now() - trackerWindow * 3600 * 1000;
     const windowed = articles.filter((a) => {
       try { return new Date(a.fetched_at).getTime() >= cutoff && a.source_key !== "bilibili_popular"; } catch { return true; }
     });
 
-    const usedIds = new Set<number>();
     const grouped: { topic: TrackerTopic; articles: Article[] }[] = [];
+    const matchedIds = new Set<number>();
 
     for (const topic of topics) {
       const label = topic.label.toLowerCase();
@@ -653,18 +660,19 @@ export default function Home() {
       // 首页把文章归入某话题、但点进实体页却看不见的不一致。
       const titleOnly = isShortCJKTerm(label);
       const matched = windowed.filter((a) => {
-        if (usedIds.has(a.id)) return false;
         const titleLower = a.title.toLowerCase();
         if (titleOnly) return titleLower.includes(label);
         const text = (titleLower + " " + a.content.toLowerCase());
         return text.includes(label);
       });
       if (matched.length === 0) continue;
-      matched.forEach((a) => usedIds.add(a.id));
+      matched.forEach((a) => matchedIds.add(a.id));
       grouped.push({ topic, articles: matched });
     }
 
-    const ungrouped = windowed.filter((a) => !usedIds.has(a.id));
+    // ungrouped 仍按"未被任何话题匹配"算 — 用作"其他"区块兜底(虽然该区块
+    // 已经在 commit 8399215 移除,这里保留派生避免改动 useMemo 结构)。
+    const ungrouped = windowed.filter((a) => !matchedIds.has(a.id));
     return { grouped, ungrouped };
   }, [articles, topics, isTopicView, trackerWindow]);
 
