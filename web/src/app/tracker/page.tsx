@@ -62,16 +62,19 @@ function formatSignedHeat(v: number): string {
   return `${v > 0 ? "+" : "-"}${formatHeat(Math.abs(v))}`;
 }
 
-// 时间窗口选项。0 表示"全部",后端 sinceHours=0 不限时间。
-// 默认 2160 小时 = 90 天 = 现行 retention 上限,等同于"自部署以来"。
+// 时间窗口选项。
+// 用户共识:6h 看刚出热点,24h 看一日内,3天/7天 看周热度,30天 看长尾。
+// 90天/全部 在 30 天 retention 之外没有更多数据,且 30 天 = retention 上限本身就够了。
 const WINDOW_OPTIONS: { hours: number; label: string }[] = [
+  { hours: 6, label: "6 小时" },
   { hours: 24, label: "24 小时" },
+  { hours: 72, label: "3 天" },
   { hours: 168, label: "7 天" },
   { hours: 720, label: "30 天" },
-  { hours: 2160, label: "90 天" },
-  { hours: 0, label: "全部" },
 ];
-const DEFAULT_WINDOW = 2160;
+// 默认 24 小时:从详情页 entity tag 跳过来时,既能看到当下热度变化,
+// 又有足够上下文(24h 范围内通常有 5+ 篇文章)。
+const DEFAULT_WINDOW = 24;
 
 function windowLabel(hours: number): string {
   const opt = WINDOW_OPTIONS.find((o) => o.hours === hours);

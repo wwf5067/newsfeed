@@ -222,7 +222,7 @@ function ArticleContent() {
     const term = keywords[0];
     (async () => {
       try {
-        const params = new URLSearchParams({ term, window: "2160" });
+        const params = new URLSearchParams({ term, window: "720" });
         const res = await fetch(`/api/v1/trackers/storyline?${params.toString()}`, { cache: "no-store" });
         if (!res.ok) return;
         const data: { items?: RelatedItem[] } = await res.json();
@@ -406,7 +406,7 @@ function ArticleContent() {
               </h2>
               {keywords.length > 0 && (
                 <Link
-                  href={`/tracker?term=${encodeURIComponent(keywords[0])}&window=2160`}
+                  href={`/tracker?term=${encodeURIComponent(keywords[0])}&window=720`}
                   className="text-xs text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100"
                 >
                   查看全部 →

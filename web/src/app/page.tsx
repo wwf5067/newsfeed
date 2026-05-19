@@ -431,7 +431,7 @@ export default function Home() {
 
   // 话题追踪
   const [topics, setTopics] = useState<TrackerTopic[]>([]);
-  const [trackerWindow, setTrackerWindow] = useState(24);
+  const [trackerWindow, setTrackerWindow] = useState(6);
 
   // "全部"Tab + 非搜索 = 话题聚合视图; "知乎"/"B站"Tab 或搜索 = 时间流
   const isTopicView = source === "" && !debouncedQ;
