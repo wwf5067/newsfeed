@@ -128,6 +128,11 @@ var (
 		"警察": {}, "平民": {}, "中国人": {}, "中国游客": {}, "游客": {}, "多人": {},
 		// 赛事/比赛连接词:大写英文但没语义价值
 		"VS": {}, "vs": {}, "Vs": {},
+		// 套话/问句独立成段时直接命中(trim 路径之外的兜底)
+		"如何评价": {}, "怎么评价": {}, "怎么看": {}, "如何看待": {},
+		"哪些信息": {}, "哪些相关方": {}, "该负责": {},
+		"姐妹关系": {}, "私生子": {},
+		"重警告处分": {}, "警告处分": {},
 	}
 	entitySuffixes = []string{
 		"公司", "集团", "大学", "医院", "银行", "汽车", "平台", "手机", "芯片", "模型",
@@ -170,7 +175,18 @@ var (
 		"选举", "高考", "考研", "春晚", "奥运", "世界杯", "季后赛",
 	}
 	trackerTrimPrefixes = []string{"关于", "有关", "对于", "因为", "因", "就", "将", "把", "被", "让", "请问", "如何看待", "如何评价", "为什么", "怎么评价", "怎么看", "最新", "突发", "热议", "围观"}
-	trackerTrimSuffixes = []string{"怎么回事", "是真的吗", "意味着什么", "说了什么", "最新回应", "回应", "发布", "表示", "来了", "出炉", "曝光", "完整版", "完整版视频", "视频", "全文", "详情", "后续", "什么情况", "哪些信息值得关注", "当前局势如何", "值得关注", "如何防范此类事情"}
+	trackerTrimSuffixes = []string{
+		"怎么回事", "是真的吗", "意味着什么", "说了什么", "最新回应", "回应",
+		"发布", "表示", "来了", "出炉", "曝光", "完整版", "完整版视频", "视频",
+		"全文", "详情", "后续", "什么情况", "哪些信息值得关注", "当前局势如何",
+		"值得关注", "如何防范此类事情",
+		// 体育动词后缀:trim 后留下"内马尔回归" → "内马尔",运动员变干净 entity
+		"回归", "落选", "出线", "夺冠", "晋级", "复出", "加盟", "转会",
+		"获胜", "战胜", "战平", "败给",
+		// 套话/标题党/讨论性后缀
+		"如何评价", "哪些信息", "哪些相关方该负责", "该负责",
+		"开开眼", "大秘密", "暖心安慰", "怎么看待",
+	}
 
 	// compoundGeoAbbrevs 2字合称→两个实体的拆解。
 	// 热搜标题常用"美以""中美""俄乌"等缩写指代两个国家/地区。
@@ -891,6 +907,11 @@ func looksLikeEntity(token string) bool {
 	if isGenericRoleToken(token) {
 		return false
 	}
+	// 通用英文词(Special/Video/Live)即使有大写字母也不是 entity。
+	// 防 hasUpperASCII 分支把它们误判 entity。
+	if isGenericEnglishWord(token) || isAllGenericEnglishWords(token) {
+		return false
+	}
 	if strings.HasPrefix(token, "#") {
 		return true
 	}
@@ -969,6 +990,12 @@ var dataLikePatterns = []*regexp.Regexp{
 	regexp.MustCompile(`\d+\s*[-:：]\s*\d+\s*战胜`),
 	// "战胜 + 队名"(头部比分被切掉的残骸,如"战胜伯恩利")
 	regexp.MustCompile(`^战胜.{2,6}$`),
+	// "马刺 122-115 雷霆"整段比分串(中间是数字-数字,前后是 2-8 字内容)
+	regexp.MustCompile(`.{2,8}\s+\d+\s*[-:：]\s*\d+\s+.{2,8}`),
+	// 运动员数据描述:"文班亚马 41 分 24 篮板"
+	regexp.MustCompile(`.{2,8}\s*\d+\s*分\s*\d+\s*(篮板|助攻|抢断|盖帽|出场|首发)`),
+	// 系列赛代号:"西决G1" / "东决G3" / "总决赛G7"
+	regexp.MustCompile(`^.{2,4}决\s*G\d+$`),
 }
 
 func looksLikeDataLikePhrase(token string) bool {
@@ -994,13 +1021,29 @@ var sentenceTailQuestions = []string{
 	"如何", "怎样", "怎么", "为何", "吗", "呢",
 }
 
+// sentenceColloquialPrefixes 口语化主语前缀。开头是这些词且整体 ≥ 4 个汉字
+// 时,几乎一定是 B 站/小红书娱乐标题的口语描述句,无信息价值。
+//
+// 例:"还好我有一个哥哥" / "我们发现了大秘密" / "为了吃龙虾" / "试了三辆007"
+//
+// 注意:"试了"和"为了"虽不是主语,但也是开头叙述句的明显起手词,一并放入。
+// 严肃新闻偶尔以"我"开头(如"我国")已被 strongGeoNames("中国")等机制
+// 独立识别,不依赖这种长串。
+var sentenceColloquialPrefixes = []string{
+	"我", "我们", "你", "咱", "咱们", "他", "她",
+	"为了", "还好", "试了", "今天", "昨天",
+	"学校", "司机", "妈妈", "爸爸", "老婆", "老公",
+	"小朋友", "外地朋友", "湖南人", "广东人", "北京人",
+	"但很", "依旧", "突然", "原来",
+}
+
 // looksLikeSentence 判定 token 是否看起来是完整句子片段而非实体或短语。
 // 任一信号命中即认为是句子,应当从 keyword 候选中剔除:
 //   - 长度过长(> 10 个汉字,词典命中的 entity 不会到这一步)
 //   - rune 总数过长(> 14,覆盖中英文混合赛事描述如 "2526赛季NBA季后赛马刺 VS 雷霆")
 //   - 含完整谓语动词模式("X 发表 Y" / "X 公布 Y")
 //   - 疑问句尾("...如何""...怎样")
-//   - 含数字+空格+连接词(赛事比分描述如"赛季英超联赛第37轮")
+//   - 口语化主语开头("我/我们/你/为了/还好/试了..."且 hanCount ≥ 4)
 func looksLikeSentence(token string) bool {
 	hanCount := hanRuneCount(token)
 	if hanCount > 10 {
@@ -1022,11 +1065,24 @@ func looksLikeSentence(token string) bool {
 			return true
 		}
 	}
+	if hanCount >= 4 {
+		for _, p := range sentenceColloquialPrefixes {
+			if strings.HasPrefix(token, p) {
+				return true
+			}
+		}
+	}
 	return false
 }
 
 func shouldKeepTrackerToken(token string) bool {
 	if isGenericRoleToken(token) {
+		return false
+	}
+	if isGenericEnglishWord(token) {
+		return false
+	}
+	if isAllGenericEnglishWords(token) {
 		return false
 	}
 	if looksLikeEntity(token) {
@@ -1044,6 +1100,44 @@ func shouldKeepTrackerToken(token string) bool {
 func isGenericRoleToken(token string) bool {
 	_, ok := stopTokens[token]
 	return ok
+}
+
+// genericEnglishWords 通用英文标签/形容词,在视频标题中出现频率高但无辨识度。
+// 这类词单独出现时既不是品牌也不是事件,作为 keyword/entity 都是噪声。
+// gse 切词遇到 "Special Video" / "Live Show" 经常输出整段或独立词,需要在
+// shouldKeepTrackerToken 入口直接拦截。
+var genericEnglishWords = map[string]struct{}{
+	"video": {}, "videos": {},
+	"live": {}, "stream": {}, "streaming": {},
+	"trailer": {}, "teaser": {},
+	"demo": {}, "beta": {}, "alpha": {},
+	"mv": {}, "ep": {}, "pv": {},
+	"special": {}, "official": {},
+	"feat": {}, "vs": {}, "ft": {},
+	"preview": {}, "review": {}, "reaction": {},
+	"intro": {}, "outro": {}, "short": {}, "shorts": {},
+	"vlog": {}, "podcast": {},
+}
+
+func isGenericEnglishWord(token string) bool {
+	_, ok := genericEnglishWords[strings.ToLower(token)]
+	return ok
+}
+
+// isAllGenericEnglishWords 处理空格分隔的英文复合词,如"Special Video""Live Stream"。
+// trackerTitleSplitRegex 不切空格,这种 token 整体进 pool,需要按空格拆开判断。
+// 全部都是 generic 时整段丢;有任一非 generic 部分(如人名)则保留(可能是品牌名)。
+func isAllGenericEnglishWords(token string) bool {
+	parts := strings.Fields(token)
+	if len(parts) < 2 {
+		return false
+	}
+	for _, p := range parts {
+		if !isGenericEnglishWord(p) {
+			return false
+		}
+	}
+	return true
 }
 
 func collectTrackerRelatedTerms(tokens []string, label string) []string {
