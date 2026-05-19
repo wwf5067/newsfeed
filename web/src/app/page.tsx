@@ -676,22 +676,12 @@ export default function Home() {
     return { grouped, ungrouped };
   }, [articles, topics, isTopicView, trackerWindow]);
 
-  // 同源 Top 10 排名(按 heat_value 排)。
-  // 不给 weibo_hot 算:微博的 heat 文本本身就含"排名N"(平台官方榜位),
-  // 再叠一个我们前端计算的 🏆N 是冗余,且 50 条按 heat_value 排可能跟微博
-  // 自家榜位不完全吻合(微博内部算法不只看 heat_value),反而误导。
+  // 同源 Top 10 排名(按 heat_value 排,所有源统一处理)
   const topIdsBySource = useMemo(() => {
     const bySource = new Map<string, Article[]>();
-    for (const a of articles) {
-      if (a.source_key === "weibo_hot") continue;
-      const list = bySource.get(a.source_key) ?? [];
-      list.push(a);
-      bySource.set(a.source_key, list);
-    }
+    for (const a of articles) { const list = bySource.get(a.source_key) ?? []; list.push(a); bySource.set(a.source_key, list); }
     const top = new Map<number, number>();
-    for (const list of bySource.values()) {
-      list.filter((a) => a.heat_value > 0).sort((x, y) => y.heat_value - x.heat_value).slice(0, 10).forEach((a, idx) => top.set(a.id, idx + 1));
-    }
+    for (const list of bySource.values()) { list.filter((a) => a.heat_value > 0).sort((x, y) => y.heat_value - x.heat_value).slice(0, 10).forEach((a, idx) => top.set(a.id, idx + 1)); }
     return top;
   }, [articles]);
 

@@ -209,10 +209,13 @@ func parseWeiboHotHTML(html string) []model.Article {
 		}
 		webURL := "https://s.weibo.com/weibo?q=" + query
 
-		// 热度文本:用于前端显示
+		// 热度文本:用于前端显示。只保留热度数字,跟百度/知乎风格统一。
+		// 微博的官方榜位信息(rank)只在首页右侧 HotPanel 用 CompactRow 的位置
+		// 编号(1-15)体现,文章卡片上不重复展示;让前端 🏆 徽章按 heat_value
+		// 计算的"同源 Top 10"统一管所有源。
 		var heatDisplay string
 		if heatValue > 0 {
-			heatDisplay = formatWeiboHeat(heatValue) + " · 排名" + rank
+			heatDisplay = formatWeiboHeat(heatValue)
 		}
 
 		// PublishedAt 按 rank 偏移(rank=1 最热 → now;rank=2 → now-1s ...),
