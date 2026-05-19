@@ -119,6 +119,18 @@ func main() {
 		log.Warn("baidu_hot skipped: BAIDU_ENABLED is not true")
 	}
 
+	if cfg.WeiboEnabled {
+		s := sources.NewWeiboHot(cfg.WeiboSchedule)
+		if err := runner.Register(s); err != nil {
+			log.Error("register source", "key", s.Key(), "err", err)
+			os.Exit(1)
+		}
+		log.Info("source registered", "key", s.Key(), "schedule", s.Schedule())
+		registered++
+	} else {
+		log.Warn("weibo_hot skipped: WEIBO_ENABLED is not true")
+	}
+
 	if registered == 0 {
 		log.Warn("no sources registered, crawler will idle")
 	}

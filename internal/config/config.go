@@ -38,6 +38,10 @@ type Config struct {
 	BaiduEnabled  bool
 	BaiduSchedule string // cron 表达式(支持秒),默认 30 分钟一次
 
+	// 数据源:微博热搜(无需 cookie,通过 visitor 系统自动获取访客身份)
+	WeiboEnabled  bool
+	WeiboSchedule string // cron 表达式(支持秒),默认 30 分钟一次
+
 	// 今日数据摘要 job:每 30 分钟更新一条 announcements,内容为今日抓取统计。
 	// 历史:此前是"每日名言",故环境变量旧名 QUOTES_SCHEDULE 仍然兼容(降级回退)。
 	SummarySchedule string // cron 表达式(支持秒),默认 30 分钟一次
@@ -76,6 +80,8 @@ func Load() (*Config, error) {
 		BilibiliSchedule: getEnv("BILIBILI_SCHEDULE", "0 */30 * * * *"),
 		BaiduEnabled:     strings.EqualFold(os.Getenv("BAIDU_ENABLED"), "true"),
 		BaiduSchedule:    getEnv("BAIDU_SCHEDULE", "0 */30 * * * *"),
+		WeiboEnabled:     strings.EqualFold(os.Getenv("WEIBO_ENABLED"), "true"),
+		WeiboSchedule:    getEnv("WEIBO_SCHEDULE", "0 */30 * * * *"),
 		// SUMMARY_SCHEDULE 为新名字,QUOTES_SCHEDULE 是旧名字保留兼容,
 		// 都没设时默认每 30 分钟一次,与抓取节奏一致。
 		SummarySchedule: getEnv("SUMMARY_SCHEDULE", getEnv("QUOTES_SCHEDULE", "0 */30 * * * *")),
