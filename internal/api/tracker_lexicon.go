@@ -105,7 +105,7 @@ var trackerEntityLexicon = []trackerLexiconEntry{
 	{Label: "王者荣耀", Category: "ip", Aliases: []string{"王者荣耀", "Honor of Kings", "honor of kings"}},
 	{Label: "英雄联盟", Category: "ip", Aliases: []string{"英雄联盟", "LOL", "lol", "League of Legends", "league of legends"}},
 	{Label: "原神", Category: "ip", Aliases: []string{"原神", "Genshin", "genshin", "Genshin Impact", "genshin impact"}},
-	{Label: "崩坏：星穹铁道", Category: "ip", Aliases: []string{"崩坏：星穹铁道", "星穹铁道", "Honkai Star Rail", "honkai star rail"}},
+	{Label: "崩坏：星穹铁道", Category: "ip", Aliases: []string{"崩坏：星穹铁道", "崩坏星穹铁道", "星穹铁道", "Honkai Star Rail", "honkai star rail"}},
 	{Label: "黑神话：悟空", Category: "ip", Aliases: []string{"黑神话：悟空", "黑神话悟空", "黑神话", "Black Myth Wukong"}},
 	{Label: "DOTA2", Category: "ip", Aliases: []string{"DOTA2", "dota2", "Dota2", "Dota 2", "DOTA 2"}},
 	{Label: "CS2", Category: "ip", Aliases: []string{"CS2", "cs2", "CSGO", "csgo", "Counter-Strike", "counter-strike"}},

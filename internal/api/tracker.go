@@ -136,6 +136,8 @@ var (
 		"警察": {}, "平民": {}, "中国人": {}, "中国游客": {}, "游客": {}, "多人": {},
 		// 赛事/比赛连接词:大写英文但没语义价值
 		"VS": {}, "vs": {}, "Vs": {},
+		// 赛事通用词:单独成词无信息量("总决赛"/"NBA决赛"等组合词不受影响,此处为精确匹配)
+		"决赛": {},
 		// 套话/问句独立成段时直接命中(trim 路径之外的兜底)
 		"如何评价": {}, "怎么评价": {}, "怎么看": {}, "如何看待": {},
 		"哪些信息": {}, "哪些相关方": {}, "该负责": {},
@@ -238,9 +240,11 @@ var (
 		"台风", "地震", "暴雨", "洪水", "发布会", "裁员", "融资", "停运", "停播", "罢工",
 		"选举", "高考", "考研", "春晚", "奥运", "世界杯", "季后赛",
 		// 补充:社会/教育/气候/金融话题关键词尾缀
-		"欺凌", "打假", "通胀", "升温", "高温", "降温",
+		"欺凌", "打假", "通胀", "高温", "降温",
 		"信用卡", "涨价", "降价", "暴跌", "暴涨",
 		"校园暴力", "虚假宣传", "偷税漏税",
+		// 医疗/民生:单独出现时是高价值话题词,不能被 weak 过滤
+		"医保",
 	}
 	trackerTrimPrefixes = []string{"关于", "有关", "对于", "因为", "因", "就", "将", "把", "被", "让", "请问", "如何看待", "如何评价", "为什么", "怎么评价", "怎么看", "最新", "突发", "热议", "围观"}
 	trackerTrimSuffixes = []string{
@@ -282,6 +286,96 @@ var (
 		"朝韩": {"朝鲜", "韩国"},
 		"印巴": {"印度", "巴基斯坦"},
 		"两岸": {"大陆", "台湾"},
+	}
+
+	// visitSuffixToEntity 动词+地名缩写→目的地实体的映射。
+	// 热搜标题常以"访华""赴美""访俄"等简短动宾短语指代访问目的地,
+	// 但目的地本身不出现在标题中(如"普京启程访华"→中国)。
+	// 以 strings.Contains 扫描整段标题,匹配即注入对应实体。
+	visitSuffixToEntity = map[string]string{
+		"访华": "中国", "赴华": "中国", "来华": "中国", "入华": "中国", "赴中": "中国",
+		"访美": "美国", "赴美": "美国", "访俄": "俄罗斯",
+		"访欧": "欧盟", "赴欧": "欧盟",
+		"访日": "日本", "赴日": "日本",
+		"访韩": "韩国", "赴韩": "韩国",
+		"访英": "英国", "赴英": "英国",
+		"访法": "法国", "赴法": "法国",
+		"访德": "德国", "赴德": "德国",
+	}
+
+	// compoundTopicKeywords 复合话题关键词:GSE 分词时容易被切散的高价值复合词。
+	// 直接对标题全文扫描,确保整体形式被提取出来;在 dedup Pass 2 中也保护其不被短子串吸收。
+	compoundTopicKeywords = map[string]struct{}{
+		"论文打假": {}, "论文造假": {}, "学术造假": {},
+		"校园欺凌": {}, "校园霸凌": {},
+	}
+
+	// geoAdjectiveSuffixes 地名仅以"地名+职业/角色"形式出现时(如"中国车手"),
+	// 该地名是形容词修饰语而非话题实体,应在最终候选中过滤。
+	geoAdjectiveSuffixes = []string{
+		"车手", "球员", "选手", "运动员", "赛手", "棋手",
+	}
+
+	// personEntityHints 人物→关联实体推断。
+	// 当标题中出现这些人物时,自动将其关联实体(国家/企业)注入候选池。
+	//
+	// 解决问题:
+	//  - "普京启程访华" → "俄罗斯"不出现在标题里但仍是核心实体
+	//  - "俄罗斯远东地区"等复合词导致独立地名无法提取
+	//  - "马斯克谈特斯拉裁员" → "特斯拉"若词典未覆盖可通过人名推断补全
+	//
+	// 注意:应只收录"一提到此人就能确定关联实体"的强绑定关系。泛化度高的政治
+	// 人物(如某国总统发言时其国家几乎必然关联)和有专属企业的企业家都适合放入。
+	personEntityHints = map[string]string{
+		// 政治人物 → 所属国家
+		"普京":     "俄罗斯",
+		"泽连斯基":  "乌克兰",
+		"特朗普":   "美国",
+		"拜登":    "美国",
+		"内塔尼亚胡": "以色列",
+		"马克龙":   "法国",
+		"朔尔茨":   "德国",
+		"苏纳克":   "英国",
+		"石破茂":   "日本",
+		"岸田":    "日本",
+		"尹锡悦":   "韩国",
+		"莫迪":    "印度",
+		"哈梅内伊":  "伊朗",
+		"哈马斯":   "巴勒斯坦",
+		// 企业家 → 旗下核心企业
+		"马斯克":  "特斯拉",
+		"雷军":   "小米",
+		"任正非":  "华为",
+		"黄仁勋":  "英伟达",
+		"贝佐斯":  "亚马逊",
+		"扎克伯格": "Meta",
+		"库克":   "苹果",
+		"皮查伊":  "谷歌",
+	}
+
+	// institutionCityHints 机构/大学→所在城市推断。
+	// 当标题中出现这些机构/大学简称或全称时,若城市名未显式出现,注入城市实体。
+	// 只收"城市名不含在机构名里"的情形,避免"武汉大学"这类已含城市名的重复注入。
+	institutionCityHints = map[string]string{
+		"清华大学":    "北京",
+		"北京大学":    "北京",
+		"清华":      "北京",
+		"北大":       "北京",
+		"复旦大学":    "上海",
+		"同济大学":    "上海",
+		"上海交通大学":  "上海",
+		"交大":       "上海", // 仅作兜底,词典里更具体的 alias 优先
+		"浙江大学":    "杭州",
+		"南开大学":    "天津",
+		"中山大学":    "广州",
+		"中国人民大学":  "北京",
+		"人民大学":    "北京",
+		"中国科学技术大学": "合肥",
+		"中科大":      "合肥",
+		"南京大学":    "南京",
+		"上海财经大学":  "上海",
+		"中央财经大学":  "北京",
+		"对外经济贸易大学": "北京",
 	}
 )
 
@@ -489,6 +583,32 @@ func extractTrackerCandidates(article model.Article) []trackerCandidate {
 		}
 	}
 
+	// 0.5. 动词+地名缩写扫描:检测"访华""赴美""访俄"等动宾短语,注入目的地实体。
+	//      目的地本身不一定出现在标题里,但短语暗示了涉及该实体(如"普京启程访华"→中国)。
+	for suffix, entity := range visitSuffixToEntity {
+		if strings.Contains(title, suffix) {
+			appendTrackerPool(&ordered, poolSeen, entity)
+		}
+	}
+
+	// 0.55. 人物→关联实体推断:当标题中出现已知人物时,自动注入其关联实体(国家/企业)。
+	//       解决"普京访华"/"俄罗斯远东地区"等场景中关联国家未显式出现的问题。
+	//       institutionCityHints 已定义但不做注入,城市-机构关联通过 related_terms 体现。
+	for person, entity := range personEntityHints {
+		if strings.Contains(title, person) {
+			appendTrackerPool(&ordered, poolSeen, entity)
+		}
+	}
+
+	// 0.6. 复合话题关键词扫描:直接检测易被分词切散的复合词,整体注入 pool。
+	//      例:"论文打假"/"校园欺凌" 被 gse 切成"论文"+"打假",导致短子串"打假"吸收长串。
+	//      这里提前把完整复合词放入 pool,dedup Pass 2 中也会保护其不被短子串吸收。
+	for kw := range compoundTopicKeywords {
+		if strings.Contains(title, kw) {
+			appendTrackerPool(&ordered, poolSeen, kw)
+		}
+	}
+
 	// 1. 词典扫描:整段标题不区分大小写匹配 lexicon 别名,优先级最高。
 	collectTrackerLexiconMatches(title, &ordered, poolSeen)
 
@@ -590,6 +710,12 @@ func extractTrackerCandidates(article model.Article) []trackerCandidate {
 	// 子串去重:如果短 candidate 是另一个更长 candidate 的子串,去掉短的。
 	// 保留更完整、信息量更大的版本(如保留"美以袭击伊朗进入第 81 天",去掉"美以袭击伊朗进入第")。
 	out = deduplicateCandidateSubstrings(out)
+
+	// 过滤"地名作形容词修饰语"的情形:如"首个中国车手"中,"中国"只是修饰"车手",
+	// 不是独立话题实体;应从输出中删去。仅当地名在标题中全程只以"地名+职业角色"
+	// 形式出现时才过滤(visitSuffixToEntity 等注入的地名本身不在标题里,不受影响)。
+	out = filterAdjunctiveGeoEntities(title, out)
+
 	if len(out) > 6 {
 		out = out[:6]
 	}
@@ -665,6 +791,10 @@ func deduplicateCandidateSubstrings(candidates []trackerCandidate) []trackerCand
 		if absorbed[i] || candidates[i].Kind == "entity" {
 			continue
 		}
+		// 复合话题关键词不被短子串吸收(如"论文打假"不被"打假"替换)
+		if _, isCompound := compoundTopicKeywords[candidates[i].Label]; isCompound {
+			continue
+		}
 		for j := range candidates {
 			if i == j || absorbed[j] || candidates[j].Kind == "entity" {
 				continue
@@ -678,6 +808,33 @@ func deduplicateCandidateSubstrings(candidates []trackerCandidate) []trackerCand
 		}
 	}
 
+	// Pass 2.5: 复合话题关键词的子词应被吸收。
+	// 如"打假"/"欺凌"是"论文打假"/"校园欺凌"的组成部分,单独出现时信息量更低,
+	// 应被吸收(保留更完整的复合形式)。
+	for i := range candidates {
+		if absorbed[i] || candidates[i].Kind == "entity" {
+			continue
+		}
+		// i 本身是复合关键词则跳过(保留)
+		if _, iIsCompound := compoundTopicKeywords[candidates[i].Label]; iIsCompound {
+			continue
+		}
+		for j := range candidates {
+			if i == j || absorbed[j] || candidates[j].Kind == "entity" {
+				continue
+			}
+			// j 必须是复合关键词
+			if _, jIsCompound := compoundTopicKeywords[candidates[j].Label]; !jIsCompound {
+				continue
+			}
+			// i 是 j 的子串 → i 被更完整的复合形式 j 吸收
+			if strings.Contains(candidates[j].Label, candidates[i].Label) {
+				absorbed[i] = true
+				break
+			}
+		}
+	}
+
 	out := make([]trackerCandidate, 0, len(candidates))
 	for i, c := range candidates {
 		if !absorbed[i] {
@@ -685,6 +842,65 @@ func deduplicateCandidateSubstrings(candidates []trackerCandidate) []trackerCand
 		}
 	}
 	return out
+}
+
+// filterAdjunctiveGeoEntities 过滤在标题中仅以"地名+职业/角色后缀"形式出现的地名实体。
+//
+// 例:"如何评价...任周灿成为首个获得纽北官方圈速认证的中国车手？"
+// "中国"只修饰"车手",本身不是话题实体 → 应过滤。
+//
+// 仅当 geoName 在标题中全程只以"geoName+geoAdjectiveSuffix"组合形式出现时才过滤。
+// 若 geoName 不在原始标题文本中(如由 visitSuffixToEntity 注入),则保留(返回 false)。
+func filterAdjunctiveGeoEntities(title string, candidates []trackerCandidate) []trackerCandidate {
+	out := make([]trackerCandidate, 0, len(candidates))
+	for _, c := range candidates {
+		if c.Kind == "entity" && onlyAppearsAsGeoAdjective(title, c.Label) {
+			continue
+		}
+		out = append(out, c)
+	}
+	return out
+}
+
+// onlyAppearsAsGeoAdjective 判定 geoName 是否仅在标题中以"geoName+角色后缀"形式出现。
+//
+// 返回 true(应过滤)的条件:
+//  1. geoName 在标题中至少出现一次(若完全不出现说明是注入来的,应保留)
+//  2. geoName 在标题中的所有出现位置,右侧都紧跟 geoAdjectiveSuffixes 中某个后缀
+//
+// 返回 false(保留)的条件:
+//  - geoName 不在原始标题文字中
+//  - geoName 有任一出现位置后面不跟角色后缀(说明它有独立信息价值)
+func onlyAppearsAsGeoAdjective(title, geoName string) bool {
+	if geoName == "" || !strings.Contains(title, geoName) {
+		return false // 不在标题里 → 是注入来的 → 保留
+	}
+	geoBytes := []byte(geoName)
+	titleBytes := []byte(title)
+	foundAny := false
+	allAdjective := true
+	for i := 0; i <= len(titleBytes)-len(geoBytes); {
+		idx := strings.Index(string(titleBytes[i:]), geoName)
+		if idx < 0 {
+			break
+		}
+		foundAny = true
+		pos := i + idx
+		after := string(titleBytes[pos+len(geoBytes):])
+		isAdj := false
+		for _, suf := range geoAdjectiveSuffixes {
+			if strings.HasPrefix(after, suf) {
+				isAdj = true
+				break
+			}
+		}
+		if !isAdj {
+			allAdjective = false
+			break
+		}
+		i = pos + len(geoBytes)
+	}
+	return foundAny && allAdjective
 }
 
 func appendTrackerPool(pool *[]string, seen map[string]struct{}, label string) {
@@ -1028,6 +1244,21 @@ func hasUpperASCII(token string) bool {
 	return false
 }
 
+// isAllUpperASCII 判定 token 是否全部由大写英文字母组成。
+// 用于过滤"GT/AI/SUV"这类无独立辨识度的纯大写缩写词——真正的大写缩写实体
+// (NBA/FIFA/GPU)已在词典中精确命中,不会走到这条路径。
+func isAllUpperASCII(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if r < 'A' || r > 'Z' {
+			return false
+		}
+	}
+	return true
+}
+
 // mixedTokenVerbs 用于检测中英混合 token 中的动词片段。
 // 如果一个含大写英文的 token 同时包含这些动词,说明它是"动词+英文名"的句子片段
 // (如"发布GPT""超越Claude""指标超GPT"),而不是真正的 entity。
@@ -1114,6 +1345,12 @@ func looksLikeEntity(token string) bool {
 		return false
 	}
 	if hasUpperASCII(token) {
+		// 短纯大写英文(GT/AI/SUV 等)不是实体。
+		// 真正的缩写实体(NBA/FIFA/GPU)已在函数开头被词典精确命中,不会到这里。
+		// ≤ 3 个字符且全大写 → 通用配置/型号代号,跳过。
+		if utf8.RuneCountInString(token) <= 3 && isAllUpperASCII(token) {
+			return false
+		}
 		// hasUpperASCII 之前可能放过"Donk踩火三杀拯救世界"这种"短英文+长中文描述"
 		// 的伪 entity(因为有 ASCII 字母触发命中)。真实 entity 通常是:
 		// · 纯英文/字母数字(NBA / iPhone / GPT-5)
@@ -1135,12 +1372,13 @@ func looksLikeEntity(token string) bool {
 		return true
 	}
 	for _, suffix := range entitySuffixes {
-		if strings.HasSuffix(token, suffix) {
+		if strings.HasSuffix(token, suffix) && utf8.RuneCountInString(token) > utf8.RuneCountInString(suffix) {
 			return true
 		}
 	}
 	for _, prefix := range entityPrefixes {
-		if strings.HasPrefix(token, prefix) && utf8.RuneCountInString(token) > utf8.RuneCountInString(prefix) {
+		remaining := utf8.RuneCountInString(token) - utf8.RuneCountInString(prefix)
+		if strings.HasPrefix(token, prefix) && remaining > 0 && remaining <= 3 {
 			return true
 		}
 	}
@@ -1159,11 +1397,7 @@ func looksLikeTopicPhrase(token string) bool {
 			return true
 		}
 	}
-	// 长度兜底:4-8 汉字之间的非词典片段才作为短语保留。
-	// 旧上限 12 太宽,会把"俄罗斯总统普京发表视频讲话"这种完整句子放过来,
-	// 配合 looksLikeSentence 一起把句子截断。
-	hanCount := hanRuneCount(token)
-	return hanCount >= 4 && hanCount <= 8
+	return false
 }
 
 // dataLikePatterns 识别"伪体育/数据描述"片段,语义上等同于通用统计文案,
@@ -1435,6 +1669,8 @@ var genericEnglishWords = map[string]struct{}{
 	"preview": {}, "review": {}, "reaction": {},
 	"intro": {}, "outro": {}, "short": {}, "shorts": {},
 	"vlog": {}, "podcast": {},
+	// 通用技术/产品词:单独出现时是泛指,不构成 entity
+	"app": {}, "apps": {},
 }
 
 func isGenericEnglishWord(token string) bool {
