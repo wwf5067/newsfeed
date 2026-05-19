@@ -14,6 +14,8 @@ deploy/.env
 .idea/
 *.swp
 .DS_Store
+.codex
+.codex/
 
 # 前端
 web/node_modules/
