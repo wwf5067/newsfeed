@@ -408,17 +408,38 @@ func parseIntDefault(s string, def int) int {
 	return def
 }
 
-// filterWeakContentMatches 过滤仅靠 content 匹配的弱相关文章。
-// 保留条件:title 中包含至少一个 term(不区分大小写)。
-// 只有 content 命中而 title 完全不含的文章被排除,避免噪声污染实体页。
+// filterWeakContentMatches 过滤超短泛词(≤2汉字)仅靠 content 匹配的弱相关文章。
+//
+// 背景:像"中国""美国"这种 2 字地名在大量文章 content 里偶然出现,如果仅靠
+// content 命中就归入该实体会引入大量噪声。但 3 字以上的词(如"武汉大学""特斯拉")
+// 在 content 里出现时大概率是真相关,应保留。
+//
+// 规则:
+//   - title 命中任一 term → 一定保留(强信号)
+//   - title 未命中但 content 命中 → 只有当所有 terms 都 ≤ 2 汉字时才过滤;
+//     如果 terms 中有 ≥ 3 汉字(或含英文字母)的长词,content 匹配视为有效召回
 func filterWeakContentMatches(articles []model.Article, terms []string) []model.Article {
+	// 预计算:是否存在长 term(≥3 汉字或含英文字母),如果有则 content 匹配有效
+	hasLongTerm := false
+	for _, t := range terms {
+		if hanRuneCount(t) >= 3 || hasLetterASCII(t) {
+			hasLongTerm = true
+			break
+		}
+	}
+	// terms 中有长词 → content 匹配可靠,不做过滤
+	if hasLongTerm {
+		return articles
+	}
+
+	// 所有 terms 都是 ≤ 2 汉字的超短泛词(如"中国""美国"),
+	// 只保留 title 命中的文章,过滤仅 content 命中的噪声
 	out := make([]model.Article, 0, len(articles))
 	for _, a := range articles {
 		titleLower := strings.ToLower(a.Title)
 		matched := false
 		for _, t := range terms {
-			needle := strings.ToLower(t)
-			if strings.Contains(titleLower, needle) {
+			if strings.Contains(titleLower, strings.ToLower(t)) {
 				matched = true
 				break
 			}
@@ -428,4 +449,14 @@ func filterWeakContentMatches(articles []model.Article, terms []string) []model.
 		}
 	}
 	return out
+}
+
+// hasLetterASCII 检查字符串是否包含 ASCII 字母
+func hasLetterASCII(s string) bool {
+	for _, r := range s {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') {
+			return true
+		}
+	}
+	return false
 }
