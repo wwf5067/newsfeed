@@ -364,6 +364,63 @@ function ArticleRow({ article, index }: { article: Article; index: number }) {
   );
 }
 
+// ======================== CompactRow (Hot 榜条目) ========================
+
+function CompactRow({ article, rank }: { article: Article; rank: number }) {
+  return (
+    <Link
+      href={`/article?id=${article.id}`}
+      className="flex items-center gap-2 border-b border-zinc-50 px-3 py-2 transition last:border-b-0 hover:bg-zinc-50 dark:border-zinc-800/50 dark:hover:bg-zinc-800/50"
+    >
+      <span className="w-5 shrink-0 text-right font-mono text-[11px] tabular-nums text-zinc-300 dark:text-zinc-600">
+        {rank}
+      </span>
+      <span className="min-w-0 flex-1 line-clamp-2 text-[13px] leading-snug text-zinc-800 dark:text-zinc-200">
+        {article.title}
+      </span>
+      {(article.heat || article.heat_value > 0) && (
+        <span className="shrink-0 text-[11px] font-medium tabular-nums text-red-500 dark:text-red-400">
+          {article.heat || formatHeat(article.heat_value)}
+        </span>
+      )}
+    </Link>
+  );
+}
+
+// ======================== HotPanel ========================
+
+function HotPanel({ zhihu, bilibili }: { zhihu: Article[]; bilibili: Article[] }) {
+  if (zhihu.length === 0 && bilibili.length === 0) return null;
+  return (
+    <div className="rounded-lg border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900">
+      <div className="flex items-center gap-2 border-b border-zinc-100 px-4 py-2.5 dark:border-zinc-800">
+        <span className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">Hot</span>
+        <span className="text-base leading-none">🔥</span>
+      </div>
+      {zhihu.length > 0 && (
+        <>
+          <div className="border-b border-zinc-50 px-4 py-1 dark:border-zinc-800/60">
+            <span className="text-[11px] font-medium text-zinc-400">知乎</span>
+          </div>
+          {zhihu.map((a, i) => (
+            <CompactRow key={a.id} article={a} rank={i + 1} />
+          ))}
+        </>
+      )}
+      {bilibili.length > 0 && (
+        <>
+          <div className="border-b border-zinc-50 border-t border-t-zinc-200 px-4 py-1 dark:border-zinc-800/60 dark:border-t-zinc-700">
+            <span className="text-[11px] font-medium text-zinc-400">B站</span>
+          </div>
+          {bilibili.map((a, i) => (
+            <CompactRow key={a.id} article={a} rank={i + 1} />
+          ))}
+        </>
+      )}
+    </div>
+  );
+}
+
 // ======================== Subscriptions Hook ========================
 
 type Subscription = { id: number; keyword: string; created_at: string };
@@ -508,9 +565,19 @@ export default function Home() {
   }, [trackerWindow, isTopicView]);
 
   // 话题聚合分组
-  const { grouped, ungrouped } = useMemo(() => {
+  const { grouped, ungrouped, zhihuTop15, bilibiliTop15 } = useMemo(() => {
+    // Hot 榜: 按 heat_value 降序取各来源前 15 条(从全部文章中提取,与分组逻辑无关)
+    const zhihuTop15 = articles
+      .filter((a) => a.source_key === "zhihu_hot" && a.heat_value > 0)
+      .sort((a, b) => b.heat_value - a.heat_value)
+      .slice(0, 15);
+    const bilibiliTop15 = articles
+      .filter((a) => a.source_key === "bilibili_popular" && a.heat_value > 0)
+      .sort((a, b) => b.heat_value - a.heat_value)
+      .slice(0, 15);
+
     if (!isTopicView || topics.length === 0) {
-      return { grouped: [] as { topic: TrackerTopic; articles: Article[] }[], ungrouped: articles };
+      return { grouped: [] as { topic: TrackerTopic; articles: Article[] }[], ungrouped: articles, zhihuTop15, bilibiliTop15 };
     }
 
     const usedIds = new Set<number>();
@@ -529,7 +596,7 @@ export default function Home() {
     }
 
     const ungrouped = articles.filter((a) => !usedIds.has(a.id));
-    return { grouped, ungrouped };
+    return { grouped, ungrouped, zhihuTop15, bilibiliTop15 };
   }, [articles, topics, isTopicView]);
 
   // 同源 Top 10 排名
@@ -692,21 +759,25 @@ export default function Home() {
               ))}
             </div>
           )}
-          {ungrouped.length > 0 && (
-            <div>
+          {(zhihuTop15.length > 0 || bilibiliTop15.length > 0 || ungrouped.length > 0) && (
+            <>
               {grouped.length > 0 && (
-                <div className="mb-3 flex items-center gap-3">
-                  <div className="h-px flex-1 bg-zinc-200 dark:bg-zinc-800" />
-                  <span className="text-xs text-zinc-400">其他热门</span>
-                  <div className="h-px flex-1 bg-zinc-200 dark:bg-zinc-800" />
-                </div>
+                <div className="mb-4 h-px bg-zinc-200 dark:bg-zinc-800" />
               )}
-              <div className="rounded-lg border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900">
-                {ungrouped.map((a, i) => (
-                  <ArticleRow key={a.id} article={a} index={i} />
-                ))}
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <HotPanel zhihu={zhihuTop15} bilibili={bilibiliTop15} />
+                {ungrouped.length > 0 && (
+                  <div className="rounded-lg border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900">
+                    <div className="border-b border-zinc-100 px-4 py-2.5 dark:border-zinc-800">
+                      <span className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">New</span>
+                    </div>
+                    {ungrouped.map((a, i) => (
+                      <ArticleRow key={a.id} article={a} index={i} />
+                    ))}
+                  </div>
+                )}
               </div>
-            </div>
+            </>
           )}
         </>
       ) : (
