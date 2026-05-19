@@ -18,8 +18,18 @@ func NewRepository(pool *pgxpool.Pool) *Repository {
 }
 
 // UpsertArticle 按 url 唯一约束去重写入,并多写一条 heat snapshot 用于趋势图。
-// 若 url 已存在,更新 title/content/author/heat/published_at/fetched_at,
+// 若 url 已存在,更新 title/content/author/heat/fetched_at,
 // 并把上一次的 heat / heat_value 搬到 prev_* 字段(用于前端展示趋势)。
+//
+// published_at 锁定首次写入值,后续 UPSERT 不再覆写。语义:
+//   - "published_at" 在我们的语境里 = 这条热搜首次被我们看到的时间(=上榜时间)
+//   - 热搜在榜期间每 30 分钟抓一次,如果每次都更 published_at = NOW(),前端
+//     按时间排序会让长期占榜的热搜永远显示在最前,失去时序意义。
+//   - 知乎源传的是 t.Created(问题创建时间,不变);百度/微博源传的是 time.Now()
+//     每次都新。COALESCE 兜底统一行为,让所有源都"首次时间锁住"。
+//
+// fetched_at 仍每次更新,用作 retention purge(超 N 天没抓到 → 已下榜 → 删)。
+//
 // 返回值:
 //   - id:文章主键(无论新插入还是更新都返回)
 //   - inserted=true 表示新插入,false 表示更新已有记录
@@ -47,7 +57,7 @@ ON CONFLICT (url) DO UPDATE SET
     prev_heat_value = articles.heat_value,
     heat            = EXCLUDED.heat,
     heat_value      = EXCLUDED.heat_value,
-    published_at    = EXCLUDED.published_at,
+    published_at    = COALESCE(articles.published_at, EXCLUDED.published_at),
     fetched_at      = NOW()
 RETURNING id, (xmax = 0) AS is_new
 `

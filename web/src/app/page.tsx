@@ -699,16 +699,6 @@ export default function Home() {
     setQuery(term);
   };
 
-  // 百度 / 微博本质是热搜榜,按热度倒序展示更符合直觉(同批次入库时间一样,
-  // 后端 SQL 是 published_at DESC,会被 id 顺序拉偏)。
-  // 知乎保持默认(按时间)— 知乎热榜是讨论性内容,看更新更合适。
-  // 搜索结果不走这条规则,保留时间序好让用户看到最近相关结果。
-  const sortedArticles = useMemo(() => {
-    if (debouncedQ) return articles;
-    if (source !== "baidu_hot" && source !== "weibo_hot") return articles;
-    return [...articles].sort((a, b) => (b.heat_value || 0) - (a.heat_value || 0));
-  }, [articles, source, debouncedQ]);
-
   return (
     <main className="mx-auto w-full max-w-3xl px-4 py-8">
       <AnnouncementBar />
@@ -838,32 +828,20 @@ export default function Home() {
               ))}
             </div>
           )}
-          {(hotlist.zhihu.length > 0 || hotlist.baidu.length > 0 || ungrouped.length > 0) && (
+          {(hotlist.zhihu.length > 0 || hotlist.baidu.length > 0 || hotlist.weibo.length > 0) && (
             <>
               {grouped.length > 0 && (
                 <div className="mb-4 h-px bg-zinc-200 dark:bg-zinc-800" />
               )}
-              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                <HotPanel zhihu={hotlist.zhihu} baidu={hotlist.baidu} weibo={hotlist.weibo} />
-                {ungrouped.length > 0 && (
-                  <div className="rounded-lg border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900">
-                    <div className="border-b border-zinc-100 px-4 py-2.5 dark:border-zinc-800">
-                      <span className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">其他</span>
-                    </div>
-                    {ungrouped.map((a, i) => (
-                      <ArticleRow key={a.id} article={a} index={i} />
-                    ))}
-                  </div>
-                )}
-              </div>
+              <HotPanel zhihu={hotlist.zhihu} baidu={hotlist.baidu} weibo={hotlist.weibo} />
             </>
           )}
         </>
       ) : (
         /* ========== 知乎/B站/搜索: 卡片式时间流 ========== */
-        sortedArticles.length > 0 && (
+        articles.length > 0 && (
           <ul className="space-y-3">
-            {sortedArticles.map((a, i) => {
+            {articles.map((a, i) => {
               const isRead = read.ids.has(a.id);
               const isStarred = starred.ids.has(a.id);
               return (
