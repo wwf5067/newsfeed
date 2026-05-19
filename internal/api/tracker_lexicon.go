@@ -241,6 +241,75 @@ var trackerEntityLexicon = []trackerLexiconEntry{
 	{Label: "北约", Category: "place", Aliases: []string{"北约", "NATO", "nato"}},
 	{Label: "美联储", Category: "place", Aliases: []string{"美联储", "Federal Reserve", "Fed"}},
 	{Label: "央行", Category: "place", Aliases: []string{"央行", "中国人民银行", "人民银行"}},
+
+	// === 国内政府部门(高频出现在政策类新闻)===
+	{Label: "国务院", Category: "place", Aliases: []string{"国务院"}},
+	{Label: "教育部", Category: "place", Aliases: []string{"教育部"}},
+	{Label: "财政部", Category: "place", Aliases: []string{"财政部"}},
+	{Label: "外交部", Category: "place", Aliases: []string{"外交部"}},
+	{Label: "公安部", Category: "place", Aliases: []string{"公安部"}},
+	{Label: "国家发改委", Category: "place", Aliases: []string{"国家发改委", "发改委"}},
+	{Label: "国家卫健委", Category: "place", Aliases: []string{"国家卫健委", "卫健委"}},
+	{Label: "证监会", Category: "place", Aliases: []string{"证监会"}},
+	{Label: "银保监会", Category: "place", Aliases: []string{"银保监会"}},
+	{Label: "网信办", Category: "place", Aliases: []string{"网信办", "中央网信办", "国家网信办"}},
+	{Label: "工信部", Category: "place", Aliases: []string{"工信部", "工业和信息化部"}},
+
+	// === 知名大学(zhihu/微博热议高频)===
+	{Label: "清华大学", Category: "place", Aliases: []string{"清华大学", "清华"}},
+	{Label: "北京大学", Category: "place", Aliases: []string{"北京大学", "北大"}},
+	{Label: "复旦大学", Category: "place", Aliases: []string{"复旦大学", "复旦"}},
+	{Label: "上海交通大学", Category: "place", Aliases: []string{"上海交通大学", "上海交大", "上交大", "上交"}},
+	{Label: "浙江大学", Category: "place", Aliases: []string{"浙江大学", "浙大"}},
+	{Label: "武汉大学", Category: "place", Aliases: []string{"武汉大学", "武大"}},
+	{Label: "南京大学", Category: "place", Aliases: []string{"南京大学", "南大"}},
+	{Label: "中山大学", Category: "place", Aliases: []string{"中山大学", "中大"}},
+	{Label: "中国科学技术大学", Category: "place", Aliases: []string{"中国科学技术大学", "中科大", "科大"}},
+	{Label: "西安交通大学", Category: "place", Aliases: []string{"西安交通大学", "西安交大", "西交"}},
+	{Label: "同济大学", Category: "place", Aliases: []string{"同济大学", "同济"}},
+	{Label: "北京师范大学", Category: "place", Aliases: []string{"北京师范大学", "北师大"}},
+	{Label: "华东师范大学", Category: "place", Aliases: []string{"华东师范大学", "华师大"}},
+	{Label: "北航", Category: "place", Aliases: []string{"北京航空航天大学", "北航"}},
+	{Label: "人民大学", Category: "place", Aliases: []string{"中国人民大学", "人大", "人民大学"}},
+
+	// === 运营商 / 通信品牌 ===
+	{Label: "中国电信", Category: "company", Aliases: []string{"中国电信", "电信"}},
+	{Label: "中国移动", Category: "company", Aliases: []string{"中国移动"}}, // "移动"太通用不放别名
+	{Label: "中国联通", Category: "company", Aliases: []string{"中国联通", "联通"}},
+	{Label: "中国广电", Category: "company", Aliases: []string{"中国广电", "广电"}},
+	{Label: "天翼", Category: "company", Aliases: []string{"天翼", "天翼云"}},
+
+	// === 大银行(国有/股份制 头部)===
+	{Label: "工商银行", Category: "company", Aliases: []string{"工商银行", "工行", "ICBC"}},
+	{Label: "建设银行", Category: "company", Aliases: []string{"建设银行", "建行", "CCB"}},
+	{Label: "农业银行", Category: "company", Aliases: []string{"农业银行", "农行", "ABC"}},
+	{Label: "中国银行", Category: "company", Aliases: []string{"中国银行", "BOC"}}, // "中行"易混不放
+	{Label: "交通银行", Category: "company", Aliases: []string{"交通银行", "交行", "BCM"}},
+	{Label: "招商银行", Category: "company", Aliases: []string{"招商银行", "招行", "CMB"}},
+	{Label: "兴业银行", Category: "company", Aliases: []string{"兴业银行", "兴业"}},
+	{Label: "浦发银行", Category: "company", Aliases: []string{"浦发银行", "浦发"}},
+
+	// === 军事方称呼(冲突 / 国防新闻高频)===
+	{Label: "美军", Category: "place", Aliases: []string{"美军", "美国军方", "US Military"}},
+	{Label: "解放军", Category: "place", Aliases: []string{"解放军", "中国人民解放军", "PLA"}},
+	{Label: "俄军", Category: "place", Aliases: []string{"俄军", "俄罗斯军方"}},
+	{Label: "以军", Category: "place", Aliases: []string{"以军", "以色列国防军", "IDF"}},
+	{Label: "伊军", Category: "place", Aliases: []string{"伊军", "伊朗革命卫队", "IRGC"}},
+	{Label: "乌军", Category: "place", Aliases: []string{"乌军", "乌克兰军方"}},
+	{Label: "驻日美军", Category: "place", Aliases: []string{"驻日美军", "驻日美军基地"}},
+	{Label: "驻韩美军", Category: "place", Aliases: []string{"驻韩美军"}},
+
+	// === 行业展会 / 国际组织(辅助 entitySuffixes 把"航展/车展"自动 entity 化)===
+	{Label: "国际足联", Category: "event", Aliases: []string{"国际足联", "FIFA", "fifa"}},
+	{Label: "亚足联", Category: "event", Aliases: []string{"亚足联", "AFC"}},
+	{Label: "国际奥委会", Category: "event", Aliases: []string{"国际奥委会", "IOC"}},
+	{Label: "珠海航展", Category: "event", Aliases: []string{"珠海航展", "中国国际航空航天博览会"}},
+	{Label: "上海车展", Category: "event", Aliases: []string{"上海车展", "上海国际汽车工业展览会"}},
+	{Label: "北京车展", Category: "event", Aliases: []string{"北京车展", "北京国际车展"}},
+	{Label: "广交会", Category: "event", Aliases: []string{"广交会", "中国进出口商品交易会"}},
+	{Label: "进博会", Category: "event", Aliases: []string{"进博会", "中国国际进口博览会"}},
+	{Label: "服贸会", Category: "event", Aliases: []string{"服贸会", "中国国际服务贸易交易会"}},
+	{Label: "数博会", Category: "event", Aliases: []string{"数博会", "中国国际大数据产业博览会"}},
 }
 
 var trackerEntityAliasIndex = buildTrackerEntityAliasIndex(trackerEntityLexicon)
