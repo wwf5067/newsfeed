@@ -314,12 +314,14 @@ func (r *Runner) runDailySummaryJob() {
 var sourceLabels = map[string]string{
 	"zhihu_hot":        "知乎",
 	"bilibili_popular": "B 站",
+	"baidu_hot":        "百度",
 }
 
 // sourceMetricNoun 不同源的"最热"指标名(避免拿"播放量"和"热度"做心理换算)。
 var sourceMetricNoun = map[string]string{
 	"zhihu_hot":        "最热",
 	"bilibili_popular": "最高",
+	"baidu_hot":        "热搜",
 }
 
 // buildSummaryContent 拼装摘要文本。stats 为空返回空串,调用方负责跳过。

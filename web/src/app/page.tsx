@@ -82,6 +82,7 @@ type HotlistItem = {
 type HotlistResp = {
   zhihu: HotlistItem[];
   bilibili: HotlistItem[];
+  baidu: HotlistItem[];
 };
 
 // ======================== Constants ========================
@@ -95,17 +96,20 @@ const DISMISSED_KEY = "dismissed_announcements";
 const SOURCE_LABELS: Record<string, string> = {
   zhihu_hot: "知乎",
   bilibili_popular: "B站",
+  baidu_hot: "百度",
 };
 
 const HEAT_ICONS: Record<string, { icon: string; label: string }> = {
   zhihu_hot: { icon: "🔥", label: "热度" },
   bilibili_popular: { icon: "▶", label: "播放量" },
+  baidu_hot: { icon: "🔍", label: "热搜" },
 };
 
 const SOURCE_FILTERS: { key: string; label: string }[] = [
   { key: "", label: "全部" },
   { key: "zhihu_hot", label: "知乎" },
   { key: "bilibili_popular", label: "B站" },
+  { key: "baidu_hot", label: "百度" },
 ];
 
 // ======================== API ========================
@@ -139,7 +143,7 @@ async function fetchHotlist(): Promise<HotlistResp> {
   const res = await fetch("/api/v1/hotlist", { cache: "no-store" });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const data: HotlistResp = await res.json();
-  return { zhihu: data.zhihu ?? [], bilibili: data.bilibili ?? [] };
+  return { zhihu: data.zhihu ?? [], bilibili: data.bilibili ?? [], baidu: data.baidu ?? [] };
 }
 
 // ======================== Formatters ========================
@@ -440,8 +444,8 @@ function CompactRow({ item, rank }: { item: HotlistItem; rank: number }) {
 
 // ======================== HotPanel ========================
 
-function HotPanel({ zhihu, bilibili }: { zhihu: HotlistItem[]; bilibili: HotlistItem[] }) {
-  if (zhihu.length === 0 && bilibili.length === 0) return null;
+function HotPanel({ zhihu, bilibili, baidu }: { zhihu: HotlistItem[]; bilibili: HotlistItem[]; baidu: HotlistItem[] }) {
+  if (zhihu.length === 0 && bilibili.length === 0 && baidu.length === 0) return null;
   return (
     <div className="rounded-lg border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900">
       <div className="flex items-center gap-2 border-b border-zinc-100 px-4 py-2.5 dark:border-zinc-800">
@@ -464,6 +468,16 @@ function HotPanel({ zhihu, bilibili }: { zhihu: HotlistItem[]; bilibili: Hotlist
             <span className="text-[11px] font-medium text-zinc-400">B站</span>
           </div>
           {bilibili.map((item, i) => (
+            <CompactRow key={item.id} item={item} rank={i + 1} />
+          ))}
+        </>
+      )}
+      {baidu.length > 0 && (
+        <>
+          <div className="border-b border-zinc-50 border-t border-t-zinc-200 px-4 py-1 dark:border-zinc-800/60 dark:border-t-zinc-700">
+            <span className="text-[11px] font-medium text-zinc-400">百度</span>
+          </div>
+          {baidu.map((item, i) => (
             <CompactRow key={item.id} item={item} rank={i + 1} />
           ))}
         </>
@@ -542,7 +556,7 @@ export default function Home() {
   const [trackerWindow, setTrackerWindow] = useState(6);
 
   // 热榜(专用接口,直接按 heat_value 排序,不受 published_at 分页影响)
-  const [hotlist, setHotlist] = useState<HotlistResp>({ zhihu: [], bilibili: [] });
+  const [hotlist, setHotlist] = useState<HotlistResp>({ zhihu: [], bilibili: [], baidu: [] });
 
   // "全部"Tab + 非搜索 = 话题聚合视图; "知乎"/"B站"Tab 或搜索 = 时间流
   const isTopicView = source === "" && !debouncedQ;
@@ -837,7 +851,7 @@ export default function Home() {
                 <div className="mb-4 h-px bg-zinc-200 dark:bg-zinc-800" />
               )}
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                <HotPanel zhihu={hotlist.zhihu} bilibili={hotlist.bilibili} />
+                <HotPanel zhihu={hotlist.zhihu} bilibili={hotlist.bilibili} baidu={hotlist.baidu} />
                 {ungrouped.length > 0 && (
                   <div className="rounded-lg border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900">
                     <div className="border-b border-zinc-100 px-4 py-2.5 dark:border-zinc-800">

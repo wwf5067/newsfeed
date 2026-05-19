@@ -398,7 +398,7 @@ func (h *Handler) GetArticleKeywords(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"keywords": keywords})
 }
 
-// GetHotlist 返回知乎和B站热榜各 top 条,附带排名变化信息。
+// GetHotlist 返回知乎、B站和百度热榜各 top 条,附带排名变化信息。
 // 参数:
 //
 //	top  默认 15,最大 30
@@ -420,15 +420,25 @@ func (h *Handler) GetHotlist(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
 		return
 	}
+	baidu, err := h.repo.ListHotlistItems(r.Context(), "baidu_hot", top)
+	if err != nil {
+		h.logger.Error("hotlist baidu", "err", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
+		return
+	}
 	if zhihu == nil {
 		zhihu = []HotlistItem{}
 	}
 	if bilibili == nil {
 		bilibili = []HotlistItem{}
 	}
+	if baidu == nil {
+		baidu = []HotlistItem{}
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"zhihu":    zhihu,
 		"bilibili": bilibili,
+		"baidu":    baidu,
 	})
 }
 
