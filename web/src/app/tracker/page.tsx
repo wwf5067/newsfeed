@@ -356,12 +356,12 @@ function TrackerPageContent() {
                 {data.score_delta > 0 ? "↑" : "↓"}
               </span>
             )}
-            {data.new_count > 0 && (
+            {data.new_count > 0 && data.new_count < data.total_articles && (
               <span
                 className="rounded-full bg-blue-100 px-3 py-1 text-blue-700 dark:bg-blue-950 dark:text-blue-300"
                 title={`${windowLabel(data.window.hours)}内新出现的相关文章数`}
               >
-                新增 {data.new_count} 条
+                其中 {data.new_count} 条为新增
               </span>
             )}
             <button

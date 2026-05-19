@@ -235,6 +235,12 @@ func (r *Runner) runOnce(s Source) {
 		"updated", updated,
 		"elapsed", time.Since(start))
 
+	// 每次抓取成功后刷新首页公告,让"最热"实时反映最新数据。
+	// 保留独立 cron 作为兜底(抓取全失败时仍有定时公告)。
+	if r.announcementsRepo != nil {
+		r.runDailySummaryJob()
+	}
+
 	// 抓完后跑订阅匹配:有新文章 + matcher 已注册才执行。
 	// 用独立 ctx 防止 fetch 的 timeout 限制邮件发送(SMTP 有时要 10+ 秒)。
 	if r.subscribe != nil && len(newIDs) > 0 {
