@@ -1201,6 +1201,25 @@ var sentenceCopulaInfixes = []string{
 // 整体作为事件描述句子,无独立信息价值。
 var sentenceFromToRegex = regexp.MustCompile(`^从.{1,5}到.{1,5}`)
 
+// sentenceVerbPrefixes 动词前缀:以这些动词开头且后面有宾语内容的短片段,
+// 是"V+O"动作描述而非话题名词短语。
+// 例:"刷新纽北" / "战胜日本" / "击败对手" / "淘汰勇士" / "打破纪录"
+//
+// 和 sentenceVerbInfixes 的区别:
+//   - Infixes 检测动词在中间(S+V+O 完整句子)
+//   - Prefixes 检测动词在开头(V+O 残片,trim 掉主语后的产物)
+//
+// 不收 strongVerbs 里的词(如"裁员""暴跌"): 那些本身就是事件关键词,
+// 独立成词时("裁员"2字)有聚合价值;这里只收"作为前缀+宾语"才有意义的动词。
+var sentenceVerbPrefixes = []string{
+	"刷新", "打破", "突破", "创下", "超越", "领跑",
+	"战胜", "击败", "淘汰", "碾压", "横扫", "力克",
+	"获得", "赢得", "拿下", "斩获", "摘得", "夺得",
+	"引发", "带动", "推动", "促进", "加速",
+	"入选", "落选", "当选", "连任",
+	"采访", "回应", "怒斥", "炮轰", "质疑",
+}
+
 // looksLikeSentence 判定 token 是否看起来是完整句子片段而非实体或短语。
 // 任一信号命中即认为是句子,应当从 keyword 候选中剔除:
 //   - 长度过长(> 10 个汉字,词典命中的 entity 不会到这一步)
@@ -1245,6 +1264,14 @@ func looksLikeSentence(token string) bool {
 	// "从 X 到 Y" 句式
 	if sentenceFromToRegex.MatchString(token) {
 		return true
+	}
+	// "V+O" 动词前缀:动词开头 + 后面有宾语(整体 ≥ 4 汉字)→ 动作描述残片
+	if hanCount >= 4 {
+		for _, v := range sentenceVerbPrefixes {
+			if strings.HasPrefix(token, v) {
+				return true
+			}
+		}
 	}
 	return false
 }
