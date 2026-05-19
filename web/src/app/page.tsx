@@ -112,6 +112,7 @@ const SOURCE_FILTERS: { key: string; label: string }[] = [
   { key: "zhihu_hot", label: "知乎" },
   // { key: "bilibili_popular", label: "B站" }, // 暂时屏蔽:内容以娱乐视频为主,与新闻聚合相关度低
   { key: "baidu_hot", label: "百度" },
+  { key: "weibo_hot", label: "微博" },
 ];
 
 // ======================== API ========================
@@ -206,26 +207,20 @@ function HeatBadge({ sourceKey, heat, value, prevValue }: { sourceKey: string; h
   const main = heat || formatHeat(value);
   if (!main) return null;
   const meta = HEAT_ICONS[sourceKey] ?? { icon: "🔥", label: "热度" };
-  const isNew = prevValue === 0 && value > 0;
-  const hasTrend = !isNew && prevValue > 0 && value > 0 && value !== prevValue;
+  const hasTrend = prevValue > 0 && value > 0 && value !== prevValue;
   const diff = value - prevValue;
   const up = diff > 0;
   const trendText = hasTrend ? formatHeat(Math.abs(diff)) : "";
   return (
-    <>
-      {isNew && (
-        <span className="inline-flex shrink-0 animate-pulse items-center rounded-full bg-red-600 px-1.5 py-0.5 text-[10px] font-bold leading-none text-white shadow-sm" title="首次上榜">NEW</span>
+    <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-red-50 px-2 py-0.5 text-xs font-medium tabular-nums text-red-600 dark:bg-red-950 dark:text-red-400" title={meta.label}>
+      <span aria-hidden="true">{meta.icon}</span>
+      <span>{main}</span>
+      {hasTrend && (
+        <span className={up ? "text-emerald-600 dark:text-emerald-400" : "text-zinc-500 dark:text-zinc-400"} title={`${meta.label}相比上次${up ? "上升" : "下降"} ${trendText}`}>
+          {up ? "↑" : "↓"}{trendText}
+        </span>
       )}
-      <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-red-50 px-2 py-0.5 text-xs font-medium tabular-nums text-red-600 dark:bg-red-950 dark:text-red-400" title={meta.label}>
-        <span aria-hidden="true">{meta.icon}</span>
-        <span>{main}</span>
-        {hasTrend && (
-          <span className={up ? "text-emerald-600 dark:text-emerald-400" : "text-zinc-500 dark:text-zinc-400"} title={`${meta.label}相比上次${up ? "上升" : "下降"} ${trendText}`}>
-            {up ? "↑" : "↓"}{trendText}
-          </span>
-        )}
-      </span>
-    </>
+    </span>
   );
 }
 
@@ -332,31 +327,25 @@ function TopicGroup({
 
       {/* 文章列表 */}
       <div className="border-t border-zinc-100 dark:border-zinc-800">
-        {displayArticles.map((a) => {
-          const isNew = a.prev_heat_value === 0 && a.heat_value > 0;
-          return (
-            <Link
-              key={a.id}
-              href={`/article?id=${a.id}`}
-              className="flex items-center gap-3 border-b border-zinc-50 px-4 py-2.5 transition last:border-b-0 hover:bg-zinc-50 dark:border-zinc-800/50 dark:hover:bg-zinc-800/50"
-            >
-              <span className="min-w-0 flex-1 truncate text-sm text-zinc-800 dark:text-zinc-200">
-                {a.title}
+        {displayArticles.map((a) => (
+          <Link
+            key={a.id}
+            href={`/article?id=${a.id}`}
+            className="flex items-center gap-3 border-b border-zinc-50 px-4 py-2.5 transition last:border-b-0 hover:bg-zinc-50 dark:border-zinc-800/50 dark:hover:bg-zinc-800/50"
+          >
+            <span className="min-w-0 flex-1 truncate text-sm text-zinc-800 dark:text-zinc-200">
+              {a.title}
+            </span>
+            <span className="shrink-0 text-[11px] text-zinc-400">
+              {SOURCE_LABELS[a.source_key] ?? a.source_key}
+            </span>
+            {(a.heat || a.heat_value > 0) && (
+              <span className="shrink-0 text-[11px] font-medium tabular-nums text-red-500 dark:text-red-400">
+                {a.heat || formatHeat(a.heat_value)}
               </span>
-              {isNew && (
-                <span className="shrink-0 rounded-full bg-red-600 px-1.5 py-0.5 text-[9px] font-bold leading-none text-white">NEW</span>
-              )}
-              <span className="shrink-0 text-[11px] text-zinc-400">
-                {SOURCE_LABELS[a.source_key] ?? a.source_key}
-              </span>
-              {(a.heat || a.heat_value > 0) && (
-                <span className="shrink-0 text-[11px] font-medium tabular-nums text-red-500 dark:text-red-400">
-                  {a.heat || formatHeat(a.heat_value)}
-                </span>
-              )}
-            </Link>
-          );
-        })}
+            )}
+          </Link>
+        ))}
       </div>
 
       {/* 底部: 展开/关联词/时间线 */}
@@ -382,8 +371,6 @@ function TopicGroup({
 // ======================== Compact Article Row (知乎/B站Tab 时间流) ========================
 
 function ArticleRow({ article, index }: { article: Article; index: number }) {
-  const isNew = article.prev_heat_value === 0 && article.heat_value > 0;
-
   return (
     <Link
       href={`/article?id=${article.id}`}
@@ -395,9 +382,6 @@ function ArticleRow({ article, index }: { article: Article; index: number }) {
       <span className="min-w-0 flex-1 line-clamp-2 text-sm leading-snug text-zinc-800 dark:text-zinc-200">
         {article.title}
       </span>
-      {isNew && (
-        <span className="mt-0.5 shrink-0 rounded-full bg-red-600 px-1.5 py-0.5 text-[9px] font-bold leading-none text-white">NEW</span>
-      )}
       <span className="mt-0.5 shrink-0 text-[11px] text-zinc-400">
         {formatRelativeTime(article.published_at)}
       </span>
@@ -414,7 +398,6 @@ function ArticleRow({ article, index }: { article: Article; index: number }) {
 
 function CompactRow({ item, rank }: { item: HotlistItem; rank: number }) {
   const rc = item.rank_change;
-  const isNew = item.is_new;
   return (
     <Link
       href={`/article?id=${item.id}`}
@@ -426,9 +409,7 @@ function CompactRow({ item, rank }: { item: HotlistItem; rank: number }) {
       <span className="min-w-0 flex-1 line-clamp-2 text-[13px] leading-snug text-zinc-800 dark:text-zinc-200">
         {item.title}
       </span>
-      {isNew ? (
-        <span className="shrink-0 rounded-full bg-red-600 px-1.5 py-0.5 text-[9px] font-bold leading-none text-white">NEW</span>
-      ) : rc !== 0 ? (
+      {rc !== 0 ? (
         <span className={`shrink-0 text-[10px] font-medium tabular-nums ${rc > 0 ? "text-emerald-500 dark:text-emerald-400" : "text-zinc-400"}`}>
           {rc > 0 ? `↑${rc}` : `↓${Math.abs(rc)}`}
         </span>
@@ -718,6 +699,16 @@ export default function Home() {
     setQuery(term);
   };
 
+  // 百度 / 微博本质是热搜榜,按热度倒序展示更符合直觉(同批次入库时间一样,
+  // 后端 SQL 是 published_at DESC,会被 id 顺序拉偏)。
+  // 知乎保持默认(按时间)— 知乎热榜是讨论性内容,看更新更合适。
+  // 搜索结果不走这条规则,保留时间序好让用户看到最近相关结果。
+  const sortedArticles = useMemo(() => {
+    if (debouncedQ) return articles;
+    if (source !== "baidu_hot" && source !== "weibo_hot") return articles;
+    return [...articles].sort((a, b) => (b.heat_value || 0) - (a.heat_value || 0));
+  }, [articles, source, debouncedQ]);
+
   return (
     <main className="mx-auto w-full max-w-3xl px-4 py-8">
       <AnnouncementBar />
@@ -857,7 +848,7 @@ export default function Home() {
                 {ungrouped.length > 0 && (
                   <div className="rounded-lg border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900">
                     <div className="border-b border-zinc-100 px-4 py-2.5 dark:border-zinc-800">
-                      <span className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">New</span>
+                      <span className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">其他</span>
                     </div>
                     {ungrouped.map((a, i) => (
                       <ArticleRow key={a.id} article={a} index={i} />
@@ -870,9 +861,9 @@ export default function Home() {
         </>
       ) : (
         /* ========== 知乎/B站/搜索: 卡片式时间流 ========== */
-        articles.length > 0 && (
+        sortedArticles.length > 0 && (
           <ul className="space-y-3">
-            {articles.map((a, i) => {
+            {sortedArticles.map((a, i) => {
               const isRead = read.ids.has(a.id);
               const isStarred = starred.ids.has(a.id);
               return (
