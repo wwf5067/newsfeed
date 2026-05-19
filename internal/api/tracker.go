@@ -1365,6 +1365,11 @@ func looksLikeEntity(token string) bool {
 		if hanRuneCount(token) > 4 {
 			return false
 		}
+		// 只有 1 个汉字+英文的混合(如"底BOSS""关AI")几乎不可能是品牌名,
+		// 都是切分残骸。真实 1 汉字 entity(如"O2")是纯英文不走 hanRuneCount 路径。
+		if hanRuneCount(token) == 1 {
+			return false
+		}
 		// 短中英混合(hanRuneCount ≤ 4)中如果包含常见动词,说明是"动词+英文名"
 		// 的描述片段(如"发布GPT""超越Claude"),不是真正的 entity。
 		// 真实 entity 中不会出现这些动词(如"华为Mate"/"小米SU7"/"AI翻译")。
