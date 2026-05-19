@@ -62,14 +62,15 @@ function formatSignedHeat(v: number): string {
 }
 
 // 时间窗口选项。0 表示"全部",后端 sinceHours=0 不限时间。
-// 默认 720 小时 = 30 天 = 现行 retention 上限,等同于"自部署以来"。
+// 默认 2160 小时 = 90 天 = 现行 retention 上限,等同于"自部署以来"。
 const WINDOW_OPTIONS: { hours: number; label: string }[] = [
   { hours: 24, label: "24 小时" },
   { hours: 168, label: "7 天" },
   { hours: 720, label: "30 天" },
+  { hours: 2160, label: "90 天" },
   { hours: 0, label: "全部" },
 ];
-const DEFAULT_WINDOW = 720;
+const DEFAULT_WINDOW = 2160;
 
 function windowLabel(hours: number): string {
   const opt = WINDOW_OPTIONS.find((o) => o.hours === hours);

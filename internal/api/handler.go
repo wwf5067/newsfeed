@@ -181,14 +181,14 @@ func (h *Handler) GetTrackerStoryline(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// window=0 表示"全部"(不限时间);其它值 clamp 到 [1, 720] 范围(720h = 30 天 retention 上限)。
+	// window=0 表示"全部"(不限时间);其它值 clamp 到 [1, 2160] 范围(2160h = 90 天 retention 上限)。
 	rawWindow := parseIntDefault(r.URL.Query().Get("window"), 24)
 	window := rawWindow
 	if window < 0 {
 		window = 24
 	}
-	if window > 720 {
-		window = 720
+	if window > 2160 {
+		window = 2160
 	}
 
 	// 把用户传的 term 通过 lexicon 展开为完整别名集合,SQL 层一次匹配所有别名。

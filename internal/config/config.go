@@ -74,15 +74,15 @@ func Load() (*Config, error) {
 		// 都没设时默认每 30 分钟一次,与抓取节奏一致。
 		SummarySchedule: getEnv("SUMMARY_SCHEDULE", getEnv("QUOTES_SCHEDULE", "0 */30 * * * *")),
 		DigestSchedule:  getEnv("DIGEST_SCHEDULE", "0 0 8 * * *"),
-		SMTPHost:         os.Getenv("SMTP_HOST"),
-		SMTPPort:         getEnvInt("SMTP_PORT", 465),
-		SMTPUser:         os.Getenv("SMTP_USER"),
-		SMTPPass:         os.Getenv("SMTP_PASS"),
-		SMTPFrom:         getEnv("SMTP_FROM", os.Getenv("SMTP_USER")),
-		DigestTo:         os.Getenv("DIGEST_TO"),
-		SiteURL:          getEnv("SITE_URL", "http://localhost:3000"),
-		RunOnStart:       strings.EqualFold(os.Getenv("RUN_ON_START"), "true"),
-		RetentionDays:    getEnvInt("RETENTION_DAYS", 30),
+		SMTPHost:        os.Getenv("SMTP_HOST"),
+		SMTPPort:        getEnvInt("SMTP_PORT", 465),
+		SMTPUser:        os.Getenv("SMTP_USER"),
+		SMTPPass:        os.Getenv("SMTP_PASS"),
+		SMTPFrom:        getEnv("SMTP_FROM", os.Getenv("SMTP_USER")),
+		DigestTo:        os.Getenv("DIGEST_TO"),
+		SiteURL:         getEnv("SITE_URL", "http://localhost:3000"),
+		RunOnStart:      strings.EqualFold(os.Getenv("RUN_ON_START"), "true"),
+		RetentionDays:   getEnvInt("RETENTION_DAYS", 90),
 	}
 
 	if cfg.DatabaseURL == "" {
