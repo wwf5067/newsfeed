@@ -77,6 +77,9 @@ services:
       # 百度热搜实时榜:无需 cookie,默认 false,需要在 .env 显式 BAIDU_ENABLED=true 才启用
       BAIDU_ENABLED: ${BAIDU_ENABLED:-false}
       BAIDU_SCHEDULE: ${BAIDU_SCHEDULE:-0 */30 * * * *}
+      # 微博热搜:无需 cookie,通过 visitor 系统自动获取访客身份
+      WEIBO_ENABLED: ${WEIBO_ENABLED:-false}
+      WEIBO_SCHEDULE: ${WEIBO_SCHEDULE:-0 */30 * * * *}
       # 今日数据摘要 job(默认 30 分钟一次,与抓取节奏一致)
       # 旧名 QUOTES_SCHEDULE 仍兼容,SUMMARY_SCHEDULE 优先
       SUMMARY_SCHEDULE: ${SUMMARY_SCHEDULE:-${QUOTES_SCHEDULE:-0 */30 * * * *}}

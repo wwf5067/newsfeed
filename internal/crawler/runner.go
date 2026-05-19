@@ -326,21 +326,40 @@ var sourceMetricNoun = map[string]string{
 	"weibo_hot":        "最热",
 }
 
+// summaryExcludedSources 列出不在公告摘要里展示的数据源。
+// B 站内容以娱乐视频为主,与新闻聚合场景不符,从公告中移除。
+var summaryExcludedSources = map[string]bool{
+	"bilibili_popular": true,
+}
+
 // buildSummaryContent 拼装摘要文本。stats 为空返回空串,调用方负责跳过。
+// summaryExcludedSources 里的源会从总数统计和 Top1 展示中排除。
 func buildSummaryContent(stats []SourceStat) string {
 	if len(stats) == 0 {
 		return ""
 	}
-	total := 0
+
+	// 过滤掉不展示的源
+	filtered := make([]SourceStat, 0, len(stats))
 	for _, s := range stats {
+		if !summaryExcludedSources[s.SourceKey] {
+			filtered = append(filtered, s)
+		}
+	}
+	if len(filtered) == 0 {
+		return ""
+	}
+
+	total := 0
+	for _, s := range filtered {
 		total += s.Count
 	}
 
 	// 头部:总数 + 各源细分(按 stats 顺序,即 count 降序)
 	parts := []string{fmt.Sprintf("📊 今日 %d 条", total)}
-	if len(stats) > 1 {
-		breakdown := make([]string, 0, len(stats))
-		for _, s := range stats {
+	if len(filtered) > 1 {
+		breakdown := make([]string, 0, len(filtered))
+		for _, s := range filtered {
 			label := sourceLabels[s.SourceKey]
 			if label == "" {
 				label = s.SourceKey
@@ -351,7 +370,7 @@ func buildSummaryContent(stats []SourceStat) string {
 	}
 
 	// 每个源的 Top1
-	for _, s := range stats {
+	for _, s := range filtered {
 		if s.TopTitle == "" {
 			continue
 		}

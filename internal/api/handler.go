@@ -414,31 +414,31 @@ func (h *Handler) GetHotlist(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
 		return
 	}
-	bilibili, err := h.repo.ListHotlistItems(r.Context(), "bilibili_popular", top)
-	if err != nil {
-		h.logger.Error("hotlist bilibili", "err", err)
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
-		return
-	}
 	baidu, err := h.repo.ListHotlistItems(r.Context(), "baidu_hot", top)
 	if err != nil {
 		h.logger.Error("hotlist baidu", "err", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
 		return
 	}
+	weibo, err := h.repo.ListHotlistItems(r.Context(), "weibo_hot", top)
+	if err != nil {
+		h.logger.Error("hotlist weibo", "err", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
+		return
+	}
 	if zhihu == nil {
 		zhihu = []HotlistItem{}
-	}
-	if bilibili == nil {
-		bilibili = []HotlistItem{}
 	}
 	if baidu == nil {
 		baidu = []HotlistItem{}
 	}
+	if weibo == nil {
+		weibo = []HotlistItem{}
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"zhihu":    zhihu,
-		"bilibili": bilibili,
-		"baidu":    baidu,
+		"zhihu": zhihu,
+		"baidu": baidu,
+		"weibo": weibo,
 	})
 }
 
