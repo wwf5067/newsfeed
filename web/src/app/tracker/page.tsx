@@ -335,12 +335,6 @@ function TrackerPageContent() {
                 聚合热度 {formatSignedHeat(data.score_delta)}
               </span>
             )}
-            <Link
-              href={`/?q=${encodeURIComponent(data.term)}`}
-              className="rounded-full bg-amber-100 px-3 py-1 text-amber-700 transition hover:bg-amber-200 dark:bg-amber-950 dark:text-amber-300 dark:hover:bg-amber-900"
-            >
-              查看全部相关文章
-            </Link>
             <button
               type="button"
               onClick={handleSubscribe}
