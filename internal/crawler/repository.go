@@ -103,15 +103,26 @@ type SourceStat struct {
 }
 
 // TodayStatsBySource 按"今日"(NOW() 当地时区 0 点起)统计每个源的文章数 + 该源最热一条。
-// 用于 daily summary 公告生成。最热口径:heat_value 降序;并列时 fetched_at 倒序。
+// 用于 daily summary 公告生成。
+//
+// 最热口径:
+//   - 微博源:取最新一次抓取批次中 published_at 最大的(= 微博官方 rank 1)。
+//     因为 weibo scraper 把 rank 编码进 published_at(rank 1=now,rank 2=now-1s ...),
+//     COALESCE 锁定后该时间永久反映微博自家排名。不直接用 heat_value 是因为
+//     微博自身 rank 不完全跟 heat_value 一致(还含互动量 / 关键词权重)。
+//   - 其它源:heat_value 降序;并列时 fetched_at 倒序。
 //
 // 数据量小(单日 100~200 条),用 LATERAL 风格的子查询直接出结果,不必优化。
 func (r *Repository) TodayStatsBySource(ctx context.Context) ([]SourceStat, error) {
 	const q = `
 WITH today AS (
-    SELECT source_key, title, heat, heat_value, fetched_at
+    SELECT source_key, title, heat, heat_value, published_at, fetched_at
     FROM articles
     WHERE fetched_at >= date_trunc('day', NOW())
+),
+weibo_latest AS (
+    SELECT date_trunc('minute', MAX(fetched_at)) AS cutoff
+    FROM today WHERE source_key = 'weibo_hot'
 )
 SELECT
     t.source_key,
@@ -119,13 +130,27 @@ SELECT
     (
         SELECT title FROM today AS x
         WHERE x.source_key = t.source_key
-        ORDER BY heat_value DESC NULLS LAST, fetched_at DESC
+          AND (
+              t.source_key <> 'weibo_hot'
+              OR x.fetched_at >= (SELECT cutoff FROM weibo_latest)
+          )
+        ORDER BY
+            CASE WHEN t.source_key = 'weibo_hot' THEN x.published_at END DESC NULLS LAST,
+            x.heat_value DESC NULLS LAST,
+            x.fetched_at DESC
         LIMIT 1
     ) AS top_title,
     (
         SELECT COALESCE(heat, '') FROM today AS x
         WHERE x.source_key = t.source_key
-        ORDER BY heat_value DESC NULLS LAST, fetched_at DESC
+          AND (
+              t.source_key <> 'weibo_hot'
+              OR x.fetched_at >= (SELECT cutoff FROM weibo_latest)
+          )
+        ORDER BY
+            CASE WHEN t.source_key = 'weibo_hot' THEN x.published_at END DESC NULLS LAST,
+            x.heat_value DESC NULLS LAST,
+            x.fetched_at DESC
         LIMIT 1
     ) AS top_heat
 FROM today AS t
