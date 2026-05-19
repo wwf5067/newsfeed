@@ -144,6 +144,8 @@ var (
 		"泰国": {}, "印度": {}, "越南": {}, "菲律宾": {}, "缅甸": {}, "朝鲜": {},
 		"英国": {}, "法国": {}, "德国": {}, "乌克兰": {}, "以色列": {}, "伊朗": {},
 		"巴西": {}, "澳洲": {}, "加拿大": {},
+		"美国": {}, "中国": {}, "日本": {}, "韩国": {}, "俄罗斯": {},
+		"欧盟": {}, "巴勒斯坦": {}, "巴基斯坦": {},
 	}
 	// strongVerbs 高信息量动词:2字但对新闻话题识别至关重要。
 	// 这些词出现在标题里时几乎一定是核心事件描述,不应被 weak 过滤。
@@ -161,8 +163,26 @@ var (
 		"台风", "地震", "暴雨", "洪水", "发布会", "裁员", "融资", "停运", "停播", "罢工",
 		"选举", "高考", "考研", "春晚", "奥运", "世界杯", "季后赛",
 	}
-	trackerTrimPrefixes = []string{"关于", "有关", "对于", "因为", "因", "就", "将", "把", "被", "让", "请问", "如何看待", "为什么", "怎么评价", "怎么看", "最新", "突发", "热议", "围观"}
-	trackerTrimSuffixes = []string{"怎么回事", "是真的吗", "意味着什么", "说了什么", "最新回应", "回应", "发布", "表示", "来了", "出炉", "曝光", "完整版", "完整版视频", "视频", "全文", "详情", "后续"}
+	trackerTrimPrefixes = []string{"关于", "有关", "对于", "因为", "因", "就", "将", "把", "被", "让", "请问", "如何看待", "如何评价", "为什么", "怎么评价", "怎么看", "最新", "突发", "热议", "围观"}
+	trackerTrimSuffixes = []string{"怎么回事", "是真的吗", "意味着什么", "说了什么", "最新回应", "回应", "发布", "表示", "来了", "出炉", "曝光", "完整版", "完整版视频", "视频", "全文", "详情", "后续", "什么情况", "哪些信息值得关注", "当前局势如何", "值得关注", "如何防范此类事情"}
+
+	// compoundGeoAbbrevs 2字合称→两个实体的拆解。
+	// 热搜标题常用"美以""中美""俄乌"等缩写指代两个国家/地区。
+	compoundGeoAbbrevs = map[string][2]string{
+		"美以": {"美国", "以色列"},
+		"中美": {"中国", "美国"},
+		"中日": {"中国", "日本"},
+		"中韩": {"中国", "韩国"},
+		"中俄": {"中国", "俄罗斯"},
+		"俄乌": {"俄罗斯", "乌克兰"},
+		"巴以": {"巴勒斯坦", "以色列"},
+		"美俄": {"美国", "俄罗斯"},
+		"美欧": {"美国", "欧盟"},
+		"中欧": {"中国", "欧盟"},
+		"朝韩": {"朝鲜", "韩国"},
+		"印巴": {"印度", "巴基斯坦"},
+		"两岸": {"大陆", "台湾"},
+	}
 )
 
 func buildTrackerTopics(articles []model.Article, now time.Time, windowHours, limit int) []trackerTopic {
@@ -308,15 +328,18 @@ func extractTrackerCandidates(article model.Article) []trackerCandidate {
 	ordered := make([]string, 0, 8)
 	poolSeen := map[string]struct{}{}
 
+	// 0. 合称拆解:检测标题中的2字合称(美以/中美/俄乌等),展开为两个独立实体。
+	for abbrev, pair := range compoundGeoAbbrevs {
+		if strings.Contains(title, abbrev) {
+			appendTrackerPool(&ordered, poolSeen, pair[0])
+			appendTrackerPool(&ordered, poolSeen, pair[1])
+		}
+	}
+
 	// 1. 词典扫描:整段标题不区分大小写匹配 lexicon 别名,优先级最高。
-	//    覆盖大多数高频实体(OpenAI / 小米 / 字节跳动 / 马斯克 / 流浪地球…)。
 	collectTrackerLexiconMatches(title, &ordered, poolSeen)
 
-	// 2. 中文分词:用 gse 把标题切成词序列。canonicalizeTrackerToken 会:
-	//    a) 在 alias 索引精确命中时还原 Label("小米su7" → "小米SU7")
-	//    b) 在 lower-case 索引兜底时还原大小写("openai" → "OpenAI")
-	//    c) 没命中则保留原 token,让后续 normalize/keep 流水线判断
-	//    分词器加载失败时返回 nil,继续走 step 3 的兜底路径。
+	// 2. 中文分词:用 gse 把标题切成词序列。
 	for _, tok := range segmentTitle(title) {
 		normalized := normalizeTrackerToken(tok)
 		if normalized == "" {
@@ -325,8 +348,7 @@ func extractTrackerCandidates(article model.Article) []trackerCandidate {
 		appendTrackerPool(&ordered, poolSeen, normalized)
 	}
 
-	// 3. 兜底:gse 加载失败 / segment 没产出 / 上面两步都没产出时,
-	//    用原"按标点切 + ASCII token 正则"扫一遍。日常很少进这条分支。
+	// 3. 兜底:按标点切分 + 正则扫描
 	segments := trackerTitleSplitRegex.Split(title, -1)
 	for _, segment := range segments {
 		normalized := normalizeTrackerToken(segment)
@@ -368,8 +390,48 @@ func extractTrackerCandidates(article model.Article) []trackerCandidate {
 			related = collectTrackerRelatedTerms(ordered, label)
 		}
 		out = append(out, trackerCandidate{Label: label, Kind: kind, RelatedTerms: related})
-		if len(out) >= 6 {
+		if len(out) >= 8 { // 多取一些,dedup 后保留 6 个
 			break
+		}
+	}
+
+	// 子串去重:如果短 candidate 是另一个更长 candidate 的子串,去掉短的。
+	// 保留更完整、信息量更大的版本(如保留"美以袭击伊朗进入第 81 天",去掉"美以袭击伊朗进入第")。
+	out = deduplicateCandidateSubstrings(out)
+	if len(out) > 6 {
+		out = out[:6]
+	}
+	return out
+}
+
+// deduplicateCandidateSubstrings 去除候选列表中的子串冗余。
+// 如果 A.Label 是 B.Label 的子串且 A 不是 entity,则移除 A。
+// entity 类型的短词永远保留(如"伊朗"不会被"美以袭击伊朗..."吸收)。
+func deduplicateCandidateSubstrings(candidates []trackerCandidate) []trackerCandidate {
+	if len(candidates) <= 1 {
+		return candidates
+	}
+	absorbed := make([]bool, len(candidates))
+	for i := range candidates {
+		if absorbed[i] || candidates[i].Kind == "entity" {
+			continue // entity 不被吸收
+		}
+		for j := range candidates {
+			if i == j || absorbed[j] {
+				continue
+			}
+			// i 是 j 的子串 → 移除 i
+			if len(candidates[i].Label) < len(candidates[j].Label) &&
+				strings.Contains(candidates[j].Label, candidates[i].Label) {
+				absorbed[i] = true
+				break
+			}
+		}
+	}
+	out := make([]trackerCandidate, 0, len(candidates))
+	for i, c := range candidates {
+		if !absorbed[i] {
+			out = append(out, c)
 		}
 	}
 	return out
