@@ -318,9 +318,6 @@ function TopicGroup({
             {topic.label}
           </Link>
           <span className={`text-xs font-medium ${m.cls}`}>{m.icon} {m.text}</span>
-          {topic.count > articles.length && (
-            <span className="text-xs text-zinc-400">{topic.count}条相关</span>
-          )}
         </div>
         <span className="shrink-0 text-sm font-medium tabular-nums text-emerald-600 dark:text-emerald-400">
           {formatHeat(topic.score)}
