@@ -1,16 +1,17 @@
 # 推 main 时:
 #   1) 跑 Go 测试
-#   2) 构建 api / crawler 镜像并推到 GHCR
+#   2) 本地编译 api / crawler binary → 用轻量 runtime 镜像打包推到 GHCR
 #   3) 构建前端静态产物
 #   4) SSH 到 Lighthouse:同步 deploy/ 配置和前端产物 -> docker compose pull && up
 #
-# 必需的 GitHub Secrets(在仓库 Settings -> Secrets and variables -> Actions 配置):
-#   SSH_HOST       Lighthouse 公网 IP
-#   SSH_USER       SSH 用户名(通常 ubuntu / lighthouse)
-#   SSH_PORT       SSH 端口(默认 22 也可以填)
-#   SSH_KEY        私钥内容(完整 PEM,含 BEGIN/END 行)
+# 优化点(对比旧版):
+#   - Go 编译在 runner 上直接跑,两个 binary 共享 Go build cache(gse 只编译一次)
+#   - Docker build 只做 COPY binary → alpine(秒级,无 go mod download)
+#   - api 和 crawler 镜像并行构建(matrix)
+#   - .dockerignore 排除 web/node_modules 等大目录
 #
-# GHCR 推送用 GITHUB_TOKEN,无需额外配置。
+# 必需的 GitHub Secrets:
+#   SSH_HOST / SSH_USER / SSH_PORT / SSH_KEY
 
 name: deploy
 
@@ -21,7 +22,6 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  # owner 小写,用于镜像 path
   IMAGE_OWNER: ${{ github.repository_owner }}
 
 jobs:
@@ -42,10 +42,16 @@ jobs:
     permissions:
       contents: read
       packages: write
-    outputs:
-      image_tag: ${{ steps.meta.outputs.tag }}
+    strategy:
+      matrix:
+        service: [api, crawler]
     steps:
       - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+          cache: true
 
       - name: Set lowercase image owner
         id: owner
@@ -55,6 +61,13 @@ jobs:
         id: meta
         run: echo "tag=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
 
+      - name: Build Go binary
+        run: |
+          mkdir -p dist
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+            go build -trimpath -ldflags="-s -w" \
+            -o dist/app ./cmd/${{ matrix.service }}
+
       - uses: docker/setup-buildx-action@v3
 
       - uses: docker/login-action@v3
@@ -63,31 +76,17 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build & push api
+      - name: Build & push ${{ matrix.service }}
         uses: docker/build-push-action@v6
         with:
-          context: .
-          file: deploy/Dockerfile.app
-          build-args: SERVICE=api
+          context: ./dist
+          file: deploy/Dockerfile.runtime
           push: true
           tags: |
-            ${{ env.REGISTRY }}/${{ steps.owner.outputs.lc }}/newsfeed-api:${{ steps.meta.outputs.tag }}
-            ${{ env.REGISTRY }}/${{ steps.owner.outputs.lc }}/newsfeed-api:latest
-          cache-from: type=gha,scope=api
-          cache-to: type=gha,scope=api,mode=max
-
-      - name: Build & push crawler
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: deploy/Dockerfile.app
-          build-args: SERVICE=crawler
-          push: true
-          tags: |
-            ${{ env.REGISTRY }}/${{ steps.owner.outputs.lc }}/newsfeed-crawler:${{ steps.meta.outputs.tag }}
-            ${{ env.REGISTRY }}/${{ steps.owner.outputs.lc }}/newsfeed-crawler:latest
-          cache-from: type=gha,scope=crawler
-          cache-to: type=gha,scope=crawler,mode=max
+            ${{ env.REGISTRY }}/${{ steps.owner.outputs.lc }}/newsfeed-${{ matrix.service }}:${{ steps.meta.outputs.tag }}
+            ${{ env.REGISTRY }}/${{ steps.owner.outputs.lc }}/newsfeed-${{ matrix.service }}:latest
+          cache-from: type=gha,scope=${{ matrix.service }}
+          cache-to: type=gha,scope=${{ matrix.service }},mode=max
 
   build-web:
     needs: test
@@ -125,13 +124,16 @@ jobs:
         id: owner
         run: echo "lc=${IMAGE_OWNER,,}" >> "$GITHUB_OUTPUT"
 
+      - name: Compute image tag
+        id: meta
+        run: echo "tag=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
       - name: Prepare deploy bundle
         run: |
           mkdir -p bundle
           cp -r deploy/docker-compose.prod.yml deploy/nginx.conf migrations bundle/
           cp web-dist.tar.gz bundle/
           tar -czf bundle.tar.gz -C bundle .
-          ls -la bundle/
 
       - name: Setup SSH
         run: |
@@ -147,13 +149,9 @@ jobs:
 
       - name: Render remote deploy script
         env:
-          IMAGE_TAG: ${{ needs.build-images.outputs.image_tag }}
+          IMAGE_TAG: ${{ steps.meta.outputs.tag }}
           OWNER: ${{ steps.owner.outputs.lc }}
         run: |
-          # 把 deploy 脚本写成本地文件,然后 scp 上去执行。
-          # 之前用 `ssh <<'REMOTE'` heredoc 通过 stdin 传脚本,Actions runner
-          # 在 stdin EOF 后偶尔会过早 disconnect(实际事故:5/18 那次 migrate
-          # 跑完瞬间 runner 主动断开,up -d 还没机会执行,但 step 报 success)。
           cat > deploy-remote.sh <<'EOS'
           #!/usr/bin/env bash
           set -euo pipefail
@@ -165,26 +163,13 @@ jobs:
           sudo mkdir -p "$APP_DIR"
           sudo chown "$USER":"$USER" "$APP_DIR"
 
-          # 在解包之前,记录关键 mount 文件的 hash,用于解包后判断是否需要 restart 容器。
-          # 背景:nginx.conf / docker-compose.prod.yml 是 file mount,tar 解包会 unlink+create
-          # 换 inode,容器持有的旧 inode 看不到新内容,必须 restart 容器才能生效。
           OLD_NGINX_HASH=$(sha256sum "$APP_DIR/nginx.conf" 2>/dev/null | cut -d' ' -f1 || echo "")
 
-          # 解包配置
           tar -xzf /tmp/newsfeed-bundle.tar.gz -C "$APP_DIR"
           rm -f /tmp/newsfeed-bundle.tar.gz
 
           NEW_NGINX_HASH=$(sha256sum "$APP_DIR/nginx.conf" 2>/dev/null | cut -d' ' -f1 || echo "")
 
-          # ---- 前端原子更新 ----
-          # 历史:之前 rm -rf web-dist + mkdir + tar 解包,会让 nginx 容器
-          # 持有的 bind mount inode 失效(幽灵挂载,看到空目录),整个部署
-          # 期间 / 返回 500,直到 restart nginx 才修。
-          #
-          # 现方案:先解包到 web-dist-staging/(全新目录),然后用 rsync
-          # 把内容同步到 web-dist/(--delete 删除旧文件)。rsync 是逐文件
-          # 原子 rename 写入,目录 inode 始终不变,nginx 容器不需要重启,
-          # 单文件级别看到的要么旧版要么新版,500 窗口降到 ~0。
           mkdir -p "$APP_DIR/web-dist" "$APP_DIR/web-dist-staging"
           rm -rf "$APP_DIR/web-dist-staging"/*
           tar -xzf "$APP_DIR/web-dist.tar.gz" -C "$APP_DIR/web-dist-staging"
@@ -194,41 +179,27 @@ jobs:
 
           cd "$APP_DIR"
 
-          # 首次部署需要手动准备 .env;之后 CI 只覆盖配置和镜像 tag
           if [ ! -f .env ]; then
-            echo "ERROR: $APP_DIR/.env missing. 首次部署请先 SSH 上来手动创建 .env(参考 .env.prod.example)" >&2
+            echo "ERROR: $APP_DIR/.env missing." >&2
             exit 1
           fi
 
-          # 用 CI 推过来的最新 tag 覆盖镜像引用
           sed -i "s|^API_IMAGE=.*|API_IMAGE=ghcr.io/${OWNER}/newsfeed-api:${IMAGE_TAG}|" .env
           sed -i "s|^CRAWLER_IMAGE=.*|CRAWLER_IMAGE=ghcr.io/${OWNER}/newsfeed-crawler:${IMAGE_TAG}|" .env
 
-          # plain 进度避免 ANSI 控制字符把 Actions runner 的输出 buffer 搞崩
           docker compose -f docker-compose.prod.yml --progress plain pull
-          # 迁移(失败则整体退出,避免 "表不存在" 这种隐性问题)
           docker compose -f docker-compose.prod.yml --progress plain --profile migrate run --rm migrate
-
-          # 先 up -d 把所有缺失的服务(尤其是首次部署的 nginx/postgres)拉起来,
-          # 已 Running 的服务是 no-op。
           docker compose -f docker-compose.prod.yml --progress plain up -d
-
-          # 强制重建 api/crawler。背景:之前几次 deploy 卡在 verify "image mismatch" ——
-          # `up -d` 改了 .env image tag 后,偶尔识别不到差异导致容器仍跑旧镜像。
-          # --force-recreate 保证容器一定换;--no-deps 防止顺带重建 postgres。
-          # 配合 nginx.conf 里的 resolver(10s TTL 自动跟新 IP),deploy 期间 502 可自愈。
           docker compose -f docker-compose.prod.yml --progress plain up -d --force-recreate --no-deps api crawler
 
-          # nginx.conf 是 file mount,tar 解包会换 inode 让容器看不到新内容。
-          # 内容真变了才 restart,避免每次部署都白白抖一下 nginx。
           if [ "$OLD_NGINX_HASH" != "$NEW_NGINX_HASH" ]; then
-            echo "==> nginx.conf changed ($OLD_NGINX_HASH -> $NEW_NGINX_HASH), restarting nginx"
+            echo "==> nginx.conf changed, restarting nginx"
             docker compose -f docker-compose.prod.yml restart nginx
           fi
           docker compose -f docker-compose.prod.yml ps
 
-          # ---- 远端自检:确认容器真的换上了新镜像 + 服务能响应 ----
-          echo "==> Verifying deployment on host..."
+          # ---- 自检 ----
+          echo "==> Verifying deployment..."
 
           EXPECTED_API="ghcr.io/${OWNER}/newsfeed-api:${IMAGE_TAG}"
           EXPECTED_CRAWLER="ghcr.io/${OWNER}/newsfeed-crawler:${IMAGE_TAG}"
@@ -237,15 +208,14 @@ jobs:
           ACTUAL_CRAWLER=$(docker inspect --format '{{.Config.Image}}' newsfeed-crawler-1)
 
           if [ "$ACTUAL_API" != "$EXPECTED_API" ]; then
-            echo "ERROR: api container image mismatch: expected=$EXPECTED_API actual=$ACTUAL_API" >&2
+            echo "ERROR: api image mismatch: expected=$EXPECTED_API actual=$ACTUAL_API" >&2
             exit 1
           fi
           if [ "$ACTUAL_CRAWLER" != "$EXPECTED_CRAWLER" ]; then
-            echo "ERROR: crawler container image mismatch: expected=$EXPECTED_CRAWLER actual=$ACTUAL_CRAWLER" >&2
+            echo "ERROR: crawler image mismatch: expected=$EXPECTED_CRAWLER actual=$ACTUAL_CRAWLER" >&2
             exit 1
           fi
 
-          # 等服务起来,最多 30 秒
           for i in $(seq 1 15); do
             code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 3 http://127.0.0.1/ || echo "000")
             if [ "$code" = "200" ]; then
@@ -276,10 +246,8 @@ jobs:
 
       - name: Run deploy script on host
         env:
-          IMAGE_TAG: ${{ needs.build-images.outputs.image_tag }}
+          IMAGE_TAG: ${{ steps.meta.outputs.tag }}
           OWNER: ${{ steps.owner.outputs.lc }}
-        # -tt 强制分配 pty,防止远端命令在 stdin 关闭后被提前结束。
-        # ServerAliveInterval 让客户端定期发心跳,长 pull 不会被认为 idle 断连。
         run: |
           ssh -tt \
             -o ServerAliveInterval=30 \

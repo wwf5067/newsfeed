@@ -1,0 +1,15 @@
+# 纯运行时镜像:不含 Go 编译环境,只 COPY 预编译好的 binary。
+# 配合 CI 中 runner 上的 `go build` 使用,共享 Go build cache。
+FROM alpine:3.20
+
+RUN apk add --no-cache ca-certificates tzdata && \
+    addgroup -S app && adduser -S -G app app
+
+ENV TZ=Asia/Shanghai
+
+# CI 会把编译好的 binary 放到 context 目录下,名为 app
+COPY app /usr/local/bin/app
+
+USER app
+
+ENTRYPOINT ["/usr/local/bin/app"]
