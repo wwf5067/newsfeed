@@ -136,6 +136,17 @@ var (
 		"哪些信息": {}, "哪些相关方": {}, "该负责": {},
 		"姐妹关系": {}, "私生子": {},
 		"重警告处分": {}, "警告处分": {},
+		// 第三波补:讨论性套话单成段 case
+		"对此你怎么看": {}, "这是什么": {}, "这意味着什么": {},
+		"这会带来哪些影响": {}, "怎样解读": {}, "亟待解决": {},
+		"会怎么写": {}, "是基于哪些考虑": {}, "背后原因是什么": {},
+		"是什么原因导致的": {}, "有哪些影响": {}, "有哪些考虑": {},
+		"应如何理解": {}, "如何解读": {}, "应如何": {}, "如何应对": {},
+		"全面推广": {}, "韩国公布": {},
+		// 长串残骸(切完是奇怪片段)
+		"四具降落伞弹出": {}, "二三线降幅收窄": {},
+		// 比分赛事残骸
+		"0 AL": {}, "AL": {}, "项目六人大名单": {},
 	}
 	entitySuffixes = []string{
 		"公司", "集团", "大学", "医院", "银行", "汽车", "平台", "手机", "芯片", "模型",
@@ -189,6 +200,13 @@ var (
 		// 套话/标题党/讨论性后缀
 		"如何评价", "哪些信息", "哪些相关方该负责", "该负责",
 		"开开眼", "大秘密", "暖心安慰", "怎么看待",
+		// 新增:疑问 / 评论性套话(prod 高频残留)
+		"对此你怎么看", "这是什么", "是什么原因导致的", "这会带来哪些影响",
+		"这意味着什么", "怎样解读", "亟待解决", "会怎么写", "是基于哪些考虑",
+		"背后原因是什么", "有哪些影响", "有哪些考虑", "应如何理解",
+		"原因是什么", "如何解读", "该如何", "应如何", "如何应对",
+		// "X 真的吗 / 真的假的 / 真假" 类
+		"真的假的", "是真是假",
 	}
 
 	// compoundGeoAbbrevs 2字合称→两个实体的拆解。
@@ -964,6 +982,15 @@ func looksLikeEntity(token string) bool {
 		return false
 	}
 	if hasUpperASCII(token) {
+		// hasUpperASCII 之前可能放过"Donk踩火三杀拯救世界"这种"短英文+长中文描述"
+		// 的伪 entity(因为有 ASCII 字母触发命中)。真实 entity 通常是:
+		// · 纯英文/字母数字(NBA / iPhone / GPT-5)
+		// · 短中英混合(R.E.D组合 / 追觅T60 / AC米兰)
+		// 长度 > 6 个汉字的中英混合大概率是"短英文起手 + 长中文动词宾语"的描述
+		// 短串,丢掉它(里面的真实 entity 已被独立切出)。
+		if hanRuneCount(token) > 6 {
+			return false
+		}
 		return true
 	}
 	if strings.Contains(token, "·") {
@@ -1031,6 +1058,18 @@ var dataLikePatterns = []*regexp.Regexp{
 	regexp.MustCompile(`.{2,8}\s*\d+\s*分\s*\d+\s*(篮板|助攻|抢断|盖帽|出场|首发)`),
 	// 系列赛代号:"西决G1" / "东决G3" / "总决赛G7"
 	regexp.MustCompile(`^.{1,4}决\s*G\d+$`),
+	// 票房/冠军数字描述:"累计票房破5亿" / "票房破10亿"
+	regexp.MustCompile(`票房破\s*\d+\s*亿`),
+	regexp.MustCompile(`累计.{0,4}破\s*\d+`),
+	// "第N冠" / "年度总冠军"
+	regexp.MustCompile(`^第\s*\d+\s*冠$`),
+	regexp.MustCompile(`机车夺.*第\s*\d+\s*冠`),
+	// 含"年X月X号"完整日期 + 后缀
+	regexp.MustCompile(`\d{4}年\s*\d+月\s*\d+号`),
+	// "LPL2026" "S22" 这种"赛事名+年份"组合(2-5 字英文/字母 + 4 位年份)
+	regexp.MustCompile(`^[A-Z]{2,5}\d{4}$`),
+	// "X 公布 Y 名单 / 阵容 / 排名"  通用赛事公示句式
+	regexp.MustCompile(`公布.{2,10}(名单|阵容|排名|榜单)`),
 }
 
 func looksLikeDataLikePhrase(token string) bool {
@@ -1049,6 +1088,9 @@ var sentenceVerbInfixes = []string{
 	"发生", "发表", "发布", "宣布", "回应", "辟谣", "披露",
 	"公布", "证实", "否认", "表态", "回复", "怀疑", "举报",
 	"晒", // 网络新闻常见单字动词:洁丽雅"晒"报案回执 / 网友"晒"图
+	// 第三波补:更多句子结构动词
+	"称", "遭", "爆料", "通报", "抓获", "确认", "收获",
+	"哭诉", "选择", "推出", "再爆", "导致", "斩获", "夺",
 }
 
 // sentenceTailQuestions 疑问句尾(trackerTrimSuffixes 已删大部分,这里兜底剩余)。
@@ -1133,6 +1175,30 @@ func looksLikeSentence(token string) bool {
 	return false
 }
 
+// channelTagSuffixes B 站/视频平台典型的栏目/分类标签后缀。
+// 这些 token 通常出现在 【XX调查】【XX测评】【XX锐评】这种栏目分类括号里,
+// 是 UP 主的内容分类,不是事件或实体本身。例:旧核调查 / 无聊的开箱 / 短的发布会 /
+// 真人实验 / 基因对比 / 毒舌的南瓜 / 泰拉TV合集版。
+var channelTagSuffixes = []string{
+	"调查", "测评", "锐评", "开箱", "评测", "实验",
+	"合集版", "合集", "栏目", "专栏", "深扒",
+	"探店",
+}
+
+// looksLikeChannelTag B 站栏目分类标签判定:
+// 含 channelTagSuffixes 任一后缀 + 长度 ≥ 3 个汉字 → 是栏目标签,不当 entity/keyword
+func looksLikeChannelTag(token string) bool {
+	if hanRuneCount(token) < 3 {
+		return false
+	}
+	for _, s := range channelTagSuffixes {
+		if strings.HasSuffix(token, s) {
+			return true
+		}
+	}
+	return false
+}
+
 func shouldKeepTrackerToken(token string) bool {
 	if isGenericRoleToken(token) {
 		return false
@@ -1144,6 +1210,9 @@ func shouldKeepTrackerToken(token string) bool {
 		return false
 	}
 	if isEpisodeCode(token) {
+		return false
+	}
+	if looksLikeChannelTag(token) {
 		return false
 	}
 	if looksLikeEntity(token) {
