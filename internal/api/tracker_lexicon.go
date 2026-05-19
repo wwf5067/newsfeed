@@ -310,6 +310,32 @@ var trackerEntityLexicon = []trackerLexiconEntry{
 	{Label: "进博会", Category: "event", Aliases: []string{"进博会", "中国国际进口博览会"}},
 	{Label: "服贸会", Category: "event", Aliases: []string{"服贸会", "中国国际服务贸易交易会"}},
 	{Label: "数博会", Category: "event", Aliases: []string{"数博会", "中国国际大数据产业博览会"}},
+
+	// === 补充高频热搜实体(评估 2025-05 迭代)===
+	// 人物:知乎/微博热搜高频出现的明星/运动员
+	{Label: "孙杨", Category: "person", Aliases: []string{"孙杨"}},
+	{Label: "谷爱凌", Category: "person", Aliases: []string{"谷爱凌", "Eileen Gu", "eileen gu"}},
+	{Label: "易烊千玺", Category: "person", Aliases: []string{"易烊千玺"}},
+	{Label: "王一博", Category: "person", Aliases: []string{"王一博"}},
+	{Label: "肖战", Category: "person", Aliases: []string{"肖战"}},
+	{Label: "杨幂", Category: "person", Aliases: []string{"杨幂"}},
+	{Label: "迪丽热巴", Category: "person", Aliases: []string{"迪丽热巴", "热巴"}},
+	{Label: "沈奕斐", Category: "person", Aliases: []string{"沈奕斐"}},
+
+	// 品牌/金融资产
+	{Label: "茅台", Category: "company", Aliases: []string{"茅台", "贵州茅台", "Moutai", "moutai"}},
+	{Label: "比特币", Category: "company", Aliases: []string{"比特币", "Bitcoin", "bitcoin", "BTC", "btc"}},
+	{Label: "以太坊", Category: "company", Aliases: []string{"以太坊", "Ethereum", "ethereum", "ETH"}},
+
+	// 地名/国家(补充 strongGeoNames 中没有但词典命中更可靠的)
+	{Label: "新加坡", Category: "place", Aliases: []string{"新加坡", "Singapore", "singapore"}},
+	{Label: "伊朗", Category: "place", Aliases: []string{"伊朗", "Iran", "iran"}},
+	{Label: "巴西", Category: "place", Aliases: []string{"巴西", "Brazil", "brazil"}},
+	{Label: "深圳", Category: "place", Aliases: []string{"深圳", "Shenzhen", "shenzhen"}},
+	{Label: "广州", Category: "place", Aliases: []string{"广州", "Guangzhou", "guangzhou"}},
+
+	// 高校补充
+	{Label: "上海财经大学", Category: "place", Aliases: []string{"上海财经大学", "上财"}},
 }
 
 var trackerEntityAliasIndex = buildTrackerEntityAliasIndex(trackerEntityLexicon)

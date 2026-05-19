@@ -100,9 +100,14 @@ var (
 			`|[\p{Han}]{2,12}`,
 	)
 	trackerTitleSplitRegex = regexp.MustCompile(`[|｜/:：,，。！？!?()（）\[\]【】<>《》"“”‘’·]+`)
-	// bookTitleRegex 提取《...》/「...」/『...』 内的作品名(电影/综艺/书/歌曲),
+	// bookTitleRegex 提取《...》 内的作品名(电影/综艺/书/歌曲),
 	// 内容长度 1-20 字,无嵌套(子组只匹配非闭合括号字符)。
-	bookTitleRegex = regexp.MustCompile(`[《「『]([^》」』]{1,20})[》」』]`)
+	// 只有《》包围的内容才 force entity,「」/『』仅进入 pool 走正常过滤。
+	bookTitleRegex = regexp.MustCompile(`[《]([^》]{1,20})[》]`)
+	// quotedPhraseRegex 提取「...」/『...』 内的引用短语。
+	// 这些在知乎标题中常用于引用普通短语(如"肉夹馍""受害者思维"),不是作品名。
+	// 进入 pool 但不 force entity,走正常的 shouldKeepTrackerToken 过滤。
+	quotedPhraseRegex = regexp.MustCompile(`[「『]([^」』]{1,20})[」』]`)
 	stopTokens     = map[string]struct{}{
 		"这个": {}, "那个": {}, "一个": {}, "一次": {}, "一些": {}, "一种": {},
 		"我们": {}, "你们": {}, "他们": {}, "大家": {}, "自己": {}, "别人": {},
@@ -118,7 +123,7 @@ var (
 		"官方": {}, "回应": {}, "发布": {}, "新闻": {}, "记者": {}, "记者称": {},
 		"万热度": {}, "万播放": {}, "播放": {}, "热度": {}, "全文": {}, "全文如下": {},
 		"直播": {}, "网友称": {}, "详情": {}, "原文": {}, "账号": {}, "博主": {},
-		"评论区": {}, "最新消息": {}, "哔哩哔哩": {}, "bilibili": {}, "B站": {},
+		"评论区": {}, "最新消息": {}, "哔哩哔哩": {}, "bilibili": {},
 		"关注": {}, "收藏": {}, "转发": {}, "评论": {}, "回答": {}, "问题": {},
 		"曝光": {}, "爆料": {}, "独家": {}, "突发": {}, "重磅": {}, "实锤": {},
 		"今天": {}, "今日": {}, "昨天": {}, "昨日": {}, "明天": {}, "明日": {},
@@ -143,6 +148,9 @@ var (
 		"是什么原因导致的": {}, "有哪些影响": {}, "有哪些考虑": {},
 		"应如何理解": {}, "如何解读": {}, "应如何": {}, "如何应对": {},
 		"全面推广": {}, "韩国公布": {},
+		// 第四波补:知乎热榜标题常见噪声碎片
+		"工作人员": {}, "什么原因": {}, "什么情况": {},
+		"普通人": {}, "过来人": {}, "年轻人": {},
 		// 长串残骸(切完是奇怪片段)
 		"四具降落伞弹出": {}, "二三线降幅收窄": {},
 		// 比分赛事残骸
@@ -189,6 +197,10 @@ var (
 		"事件", "计划", "政策", "比赛", "决赛", "演唱会", "电影", "电视剧", "综艺", "事故",
 		"台风", "地震", "暴雨", "洪水", "发布会", "裁员", "融资", "停运", "停播", "罢工",
 		"选举", "高考", "考研", "春晚", "奥运", "世界杯", "季后赛",
+		// 补充:社会/教育/气候/金融话题关键词尾缀
+		"欺凌", "打假", "通胀", "升温", "高温", "降温",
+		"信用卡", "涨价", "降价", "暴跌", "暴涨",
+		"校园暴力", "虚假宣传", "偷税漏税",
 	}
 	trackerTrimPrefixes = []string{"关于", "有关", "对于", "因为", "因", "就", "将", "把", "被", "让", "请问", "如何看待", "如何评价", "为什么", "怎么评价", "怎么看", "最新", "突发", "热议", "围观"}
 	trackerTrimSuffixes = []string{
@@ -209,6 +221,9 @@ var (
 		"原因是什么", "如何解读", "该如何", "应如何", "如何应对",
 		// "X 真的吗 / 真的假的 / 真假" 类
 		"真的假的", "是真是假",
+		// 知乎热榜疑问尾缀补充
+		"什么原因", "什么情况", "合理吗", "你认同吗",
+		"能走多远", "出路在哪", "在哪里",
 	}
 
 	// compoundGeoAbbrevs 2字合称→两个实体的拆解。
@@ -384,12 +399,12 @@ func extractTrackerCandidates(article model.Article) []trackerCandidate {
 
 	ordered := make([]string, 0, 8)
 	poolSeen := map[string]struct{}{}
-	// forcedEntities 由"被《》或【】明确包围的内容"组成,跳过 looksLikeEntity 的
+	// forcedEntities 由"被《》明确包围的内容"组成,跳过 looksLikeEntity 的
 	// 启发式判定,直接标 entity。这样《给阿嬷的情书》《影·迷》这种作品名就算
 	// 没在词典里也能正确识别为 entity,而不是落到 keyword/被句子检测丢掉。
 	forcedEntities := map[string]struct{}{}
 
-	// -1. 《》/「」/『』 包围的内容预提取为高优先级 entity(电影/综艺/书名/作品名)。
+	// -1. 《》包围的内容预提取为高优先级 entity(电影/综艺/书名/作品名)。
 	//     trackerTitleSplitRegex 已经把这些括号当切分符,但切完只剩"裸内容",
 	//     在 ordered 里跟普通片段没区别 — 长度超过 8 字会被 looksLikeSentence 丢。
 	//     这里多走一遍正则把它们标成 forced entity,后面 shouldKeepTrackerToken
@@ -400,12 +415,25 @@ func extractTrackerCandidates(article model.Article) []trackerCandidate {
 			if normalized == "" {
 				continue
 			}
-			// 即使被《》/「」包围,如果是套话(如「私生子」「姐妹关系」)或通用英文词,
+			// 即使被《》包围,如果是套话(如「私生子」「姐妹关系」)或通用英文词,
 			// 也不应强制当 entity — 它们是引号引用,不是作品名。
 			if isGenericRoleToken(normalized) || isGenericEnglishWord(normalized) {
 				continue
 			}
 			forcedEntities[normalized] = struct{}{}
+			appendTrackerPool(&ordered, poolSeen, normalized)
+		}
+	}
+
+	// -0.5. 「」/『』包围的引用短语:进入 pool 但不 force entity。
+	//       知乎标题大量使用「」来引用普通短语(如"肉夹馍""受害者思维""做好抗通胀准备"),
+	//       这些不是作品名,应走正常的 shouldKeepTrackerToken 过滤流程。
+	for _, m := range quotedPhraseRegex.FindAllStringSubmatch(title, -1) {
+		if name := strings.TrimSpace(m[1]); name != "" {
+			normalized := canonicalizeTrackerToken(name)
+			if normalized == "" {
+				continue
+			}
 			appendTrackerPool(&ordered, poolSeen, normalized)
 		}
 	}
@@ -919,6 +947,24 @@ func hasUpperASCII(token string) bool {
 	return false
 }
 
+// mixedTokenVerbs 用于检测中英混合 token 中的动词片段。
+// 如果一个含大写英文的 token 同时包含这些动词,说明它是"动词+英文名"的句子片段
+// (如"发布GPT""超越Claude""指标超GPT"),而不是真正的 entity。
+var mixedTokenVerbs = []string{
+	"发布", "超越", "指标", "性能", "接入", "搭载", "采用", "支持",
+	"对比", "碾压", "吊打", "战胜", "击败", "淘汰", "加盟",
+	"普及", "推出", "升级", "更新", "兼容",
+}
+
+func containsMixedTokenVerb(token string) bool {
+	for _, v := range mixedTokenVerbs {
+		if strings.Contains(token, v) {
+			return true
+		}
+	}
+	return false
+}
+
 func hanRuneCount(token string) int {
 	count := 0
 	for _, r := range token {
@@ -988,9 +1034,15 @@ func looksLikeEntity(token string) bool {
 		// 的伪 entity(因为有 ASCII 字母触发命中)。真实 entity 通常是:
 		// · 纯英文/字母数字(NBA / iPhone / GPT-5)
 		// · 短中英混合(R.E.D组合 / 追觅T60 / AC米兰)
-		// 长度 > 6 个汉字的中英混合大概率是"短英文起手 + 长中文动词宾语"的描述
+		// 长度 > 4 个汉字的中英混合大概率是"短英文起手 + 长中文动词宾语"的描述
 		// 短串,丢掉它(里面的真实 entity 已被独立切出)。
-		if hanRuneCount(token) > 6 {
+		if hanRuneCount(token) > 4 {
+			return false
+		}
+		// 短中英混合(hanRuneCount ≤ 4)中如果包含常见动词,说明是"动词+英文名"
+		// 的描述片段(如"发布GPT""超越Claude"),不是真正的 entity。
+		// 真实 entity 中不会出现这些动词(如"华为Mate"/"小米SU7"/"AI翻译")。
+		if hanRuneCount(token) >= 2 && containsMixedTokenVerb(token) {
 			return false
 		}
 		return true
@@ -1202,6 +1254,11 @@ func looksLikeChannelTag(token string) bool {
 }
 
 func shouldKeepTrackerToken(token string) bool {
+	// 词典中精确命中的 entity 总是保留,优先级高于 stopTokens 等过滤。
+	// 这保证了像"B站"这种同时在 lexicon 和可能被当作通用词的 token 不被误过滤。
+	if _, ok := trackerEntityLabelSet[token]; ok {
+		return true
+	}
 	if isGenericRoleToken(token) {
 		return false
 	}
