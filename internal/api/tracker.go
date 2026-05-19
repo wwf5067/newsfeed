@@ -209,6 +209,29 @@ var (
 		"持枪": {},
 		"辟谣": {}, "道歉": {}, "塌房": {}, "翻供": {}, "自首": {},
 	}
+	// strongTopicNouns 高信息量话题名词:2-3字但构成热搜核心话题,不应被 weak 过滤。
+	// 和 strongVerbs 的区别:这些是名词/名词性短语,不是动作,但同样有聚合价值。
+	// 选词原则:频繁出现在热搜标题 + 有独立话题追踪意义 + 不会和通用词混淆。
+	strongTopicNouns = map[string]struct{}{
+		// 经济/房产
+		"房价": {}, "楼市": {}, "股市": {}, "基金": {}, "期货": {},
+		"通胀": {}, "通缩": {}, "加息": {}, "降息": {}, "汇率": {},
+		"GDP": {}, "CPI": {}, "PMI": {},
+		// 民生
+		"高考": {}, "考研": {}, "考公": {}, "就业": {}, "失业": {},
+		"社保": {}, "医保": {}, "养老": {}, "生育": {}, "房贷": {},
+		"彩礼": {}, "离婚": {}, "少子化": {},
+		// 科技/互联网
+		"芯片": {}, "光刻机": {}, "算力": {},
+		"内卷": {}, "躺平": {},
+		// 社会/法治
+		"醉驾": {}, "酒驾": {}, "碰瓷": {}, "传销": {},
+		"网暴": {}, "AI换脸": {},
+		// 气候/环境
+		"雾霾": {}, "沙尘暴": {},
+		// 国际
+		"关税": {}, "制裁": {}, "脱钩": {},
+	}
 	topicSuffixes = []string{
 		"事件", "计划", "政策", "比赛", "决赛", "演唱会", "电影", "电视剧", "综艺", "事故",
 		"台风", "地震", "暴雨", "洪水", "发布会", "裁员", "融资", "停运", "停播", "罢工",
@@ -1005,6 +1028,9 @@ func isWeakChineseFragment(token string) bool {
 	if _, ok := strongVerbs[token]; ok {
 		return false
 	}
+	if _, ok := strongTopicNouns[token]; ok {
+		return false
+	}
 	return hanRuneCount(token) <= 3
 }
 
@@ -1332,6 +1358,10 @@ func shouldKeepTrackerToken(token string) bool {
 		return false
 	}
 	if looksLikeEntity(token) {
+		return true
+	}
+	// strongTopicNouns: 高信息量话题名词(房价/楼市/社保等),和 entity 同优先级保留
+	if _, ok := strongTopicNouns[token]; ok {
 		return true
 	}
 	if looksLikeDataLikePhrase(token) {
