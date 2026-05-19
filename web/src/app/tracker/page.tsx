@@ -56,11 +56,6 @@ function formatHeat(v: number): string {
   return String(Math.round(v));
 }
 
-function formatSignedHeat(v: number): string {
-  if (!Number.isFinite(v) || v === 0) return "0";
-  return `${v > 0 ? "+" : "-"}${formatHeat(Math.abs(v))}`;
-}
-
 // 时间窗口选项。0 表示"全部",后端 sinceHours=0 不限时间。
 // 默认 720 小时 = 30 天 = 现行 retention 上限,等同于"自部署以来"。
 const WINDOW_OPTIONS: { hours: number; label: string }[] = [
@@ -331,14 +326,6 @@ function TrackerPageContent() {
             </p>
           </div>
           <div className="flex flex-wrap gap-2 text-xs">
-            <span className="rounded-full bg-zinc-100 px-3 py-1 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300">
-              {data.momentum === "up" ? "升温" : data.momentum === "down" ? "回落" : "持平"}
-            </span>
-            {data.score_delta !== 0 && (
-              <span className="rounded-full bg-emerald-100 px-3 py-1 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300">
-                聚合热度 {formatSignedHeat(data.score_delta)}
-              </span>
-            )}
             <button
               type="button"
               onClick={handleSubscribe}
