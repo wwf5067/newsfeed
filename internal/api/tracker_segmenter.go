@@ -27,12 +27,12 @@ func loadTrackerSegmenter() {
 	}
 	// 把 lexicon 主标签注入 user dict,让 gse 把"东方甄选/与辉同行/小米SU7" 整体切出。
 	// 只注入 Label,不注入别名 — 别名变体太多会污染分词器,反而切错。
-	//
-	// 关键:用 AddToken(批量,不立即重建索引),不用 AddTokenForce(每次 ~500ms)。
-	// 135 条 lexicon 用 AddTokenForce 等于 ~67 秒卡顿,用 AddToken 总耗时 < 1ms。
 	for _, e := range trackerEntityLexicon {
 		_ = trackerSeg.AddToken(e.Label, 100, "n")
 	}
+	// 重建 DAG 索引:AddToken 只是把词加进字典,不触发路由计算,
+	// 必须调 CalcToken 让新词在后续 Cut 时生效。
+	trackerSeg.CalcToken()
 }
 
 // segmentTitle 把标题切成词序列。

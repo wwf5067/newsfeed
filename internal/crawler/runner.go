@@ -77,8 +77,11 @@ func NewRunner(
 }
 
 // Register 注册一个 Source 到调度器。
+// 使用最细粒度(15 分钟)作为基础 cron,通过 shouldRunAtHour 动态决定是否执行。
 func (r *Runner) Register(s Source) error {
-	_, err := r.cron.AddFunc(s.Schedule(), func() {
+	// 用 15 分钟固定间隔替代 source 自带的 schedule。
+	// 实际执行与否由 shouldRunThisTick 在 runOnce 里判定。
+	_, err := r.cron.AddFunc("0 */15 * * * *", func() {
 		r.runOnce(s)
 	})
 	if err != nil {
@@ -162,6 +165,16 @@ func (r *Runner) Stop(ctx context.Context) {
 
 func (r *Runner) runOnce(s Source) {
 	log := r.logger.With("source", s.Key())
+
+	// ---- 分时段频率控制 ----
+	// 基础 tick 是 15 分钟。按当前小时决定是否跳过本次 tick:
+	//   9:00-12:00  每 15 分钟执行(每次都跑)
+	//   12:00-18:00 每 20 分钟执行(约 3/4 的 tick 跑)→ 简化为隔一次跳过:00 和 :30 执行,:15 和 :45 跳过
+	//   18:00-24:00 每 30 分钟执行(隔一次)
+	//   0:00-9:00   每 60 分钟执行(4 次 tick 跑 1 次)
+	if !r.shouldRunThisTick(s.Key()) {
+		return
+	}
 
 	// ---- 退避检查:如果还在退避期内,直接跳过 ----
 	if until := r.getBackoffUntil(s.Key()); !until.IsZero() && time.Now().Before(until) {
@@ -365,6 +378,35 @@ func (r *Runner) runDigestJob() {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	r.digest.Run(ctx)
+}
+
+// shouldRunThisTick 分时段频率控制。
+// 基础 tick 是每 15 分钟(:00, :15, :30, :45),按当前小时+分钟决定本次是否真正执行。
+//
+// 策略(上海时区):
+//
+//	09:00-12:00 → 每 15 分钟(所有 tick 都执行)
+//	12:00-18:00 → 每 30 分钟(只在 :00 和 :30 执行)
+//	18:00-24:00 → 每 30 分钟(只在 :00 和 :30 执行)
+//	00:00-09:00 → 每 60 分钟(只在 :00 执行)
+//
+// 每日预估请求量: 知乎 12+12+12+9 = 45 次(vs 原来 48 次,总量差不多但分布更合理)
+func (r *Runner) shouldRunThisTick(sourceKey string) bool {
+	now := time.Now()
+	hour := now.Hour()
+	minute := now.Minute()
+
+	switch {
+	case hour >= 9 && hour < 12:
+		// 黄金时段:每 15 分钟,全部执行
+		return true
+	case hour >= 12 && hour < 24:
+		// 白天+晚间:每 30 分钟,只在 :00 和 :30 执行
+		return minute < 15 || (minute >= 30 && minute < 45)
+	default:
+		// 凌晨 0:00-9:00:每 60 分钟,只在 :00 执行
+		return minute < 15
+	}
 }
 
 // getBackoffUntil 读取某 Source 当前的退避截止时间。

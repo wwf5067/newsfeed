@@ -452,18 +452,17 @@ func buildTrackerEntityAliasIndex(entries []trackerLexiconEntry) []trackerLexico
 
 func collectTrackerLexiconMatches(title string, pool *[]string, seen map[string]struct{}) {
 	lowerTitle := strings.ToLower(title)
-	for _, alias := range trackerEntityAliasIndex {
-		if alias.Lower == "" {
-			continue
-		}
-		if alias.RequiresBoundary {
-			if !containsTrackerAliasWithBoundary(lowerTitle, alias.Lower) {
+	// Aho-Corasick 一次扫描找到所有命中的 alias 索引
+	hits := acMatcher.MatchThreadSafe([]byte(lowerTitle))
+	for _, idx := range hits {
+		label := acPatternLabels[idx]
+		// 短 alias 需要 boundary check(防止 "o1" 匹配 "go123")
+		if acPatternNeedBoundary[idx] {
+			if !containsTrackerAliasWithBoundary(lowerTitle, strings.ToLower(label)) {
 				continue
 			}
-		} else if !strings.Contains(lowerTitle, alias.Lower) {
-			continue
 		}
-		appendTrackerPool(pool, seen, alias.Label)
+		appendTrackerPool(pool, seen, label)
 	}
 }
 

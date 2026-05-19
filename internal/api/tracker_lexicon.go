@@ -1,6 +1,10 @@
 package api
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/cloudflare/ahocorasick"
+)
 
 // trackerEntityLexicon 是人工维护的专用实体词典。
 // 设计原则:
@@ -261,4 +265,64 @@ func buildTrackerEntityTermsByLabel(entries []trackerLexiconEntry) map[string][]
 		out[label] = terms
 	}
 	return out
+}
+
+// ======================== Aho-Corasick 多模匹配 ========================
+//
+// 预构建一个 AC 自动机,patterns 是所有 alias 的 lower 形式。
+// Match(lowerTitle) 返回命中的 pattern 索引,通过 acPatternLabels 映射回 Label。
+// 复杂度从 O(标题数 × 别名数) 降为 O(标题长度)。
+
+var (
+	// acMatcher AC 自动机实例(启动时一次性构建)
+	acMatcher *ahocorasick.Matcher
+	// acPatternLabels 索引→Label 映射:acMatcher.Match 返回的整数是 patterns 数组下标
+	acPatternLabels []string
+	// acPatternNeedBoundary 索引→是否需要 boundary check
+	acPatternNeedBoundary []bool
+)
+
+func init() {
+	acMatcher, acPatternLabels, acPatternNeedBoundary = buildACMatcher(trackerEntityLexicon)
+}
+
+func buildACMatcher(entries []trackerLexiconEntry) (*ahocorasick.Matcher, []string, []bool) {
+	var patterns []string
+	var labels []string
+	var needBoundary []bool
+
+	seen := map[string]struct{}{}
+	for _, entry := range entries {
+		label := strings.TrimSpace(entry.Label)
+		if label == "" {
+			continue
+		}
+		allAliases := append([]string{label}, entry.Aliases...)
+		for _, alias := range allAliases {
+			lower := strings.ToLower(strings.TrimSpace(alias))
+			if lower == "" || len(lower) < 2 {
+				continue
+			}
+			if _, ok := seen[lower]; ok {
+				continue
+			}
+			seen[lower] = struct{}{}
+			patterns = append(patterns, lower)
+			labels = append(labels, label)
+			// 短纯英文 alias(如 "o1","cs2")需要 boundary check 防止误匹配
+			needBoundary = append(needBoundary, len(lower) <= 3 && isASCII(lower))
+		}
+	}
+
+	matcher := ahocorasick.NewStringMatcher(patterns)
+	return matcher, labels, needBoundary
+}
+
+func isASCII(s string) bool {
+	for _, r := range s {
+		if r > 127 {
+			return false
+		}
+	}
+	return true
 }
