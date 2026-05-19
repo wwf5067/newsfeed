@@ -308,6 +308,8 @@ var (
 	compoundTopicKeywords = map[string]struct{}{
 		"论文打假": {}, "论文造假": {}, "学术造假": {},
 		"校园欺凌": {}, "校园霸凌": {},
+		"贸易谈判": {}, "贸易战": {},
+		"全球升温": {}, "气候变化": {}, "全球变暖": {},
 	}
 
 	// geoAdjectiveSuffixes 地名仅以"地名+职业/角色"形式出现时(如"中国车手"),
@@ -685,12 +687,15 @@ func extractTrackerCandidates(article model.Article) []trackerCandidate {
 	for _, label := range ordered {
 		_, forced := forcedEntities[label]
 		_, repeated := repeatedTokens[label]
+		_, isCompoundKw := compoundTopicKeywords[label]
 		// repeated: 标题中出现 ≥2 次的词,跳过大部分过滤但仍需排除 stopTokens。
 		// stopTokens 里的词(如"回应""发布")即使重复出现也不应该当关键词。
 		if repeated && isGenericRoleToken(label) {
 			repeated = false
 		}
-		if !forced && !repeated && !shouldKeepTrackerToken(label) {
+		// compoundTopicKeywords 是人工精选的高价值复合词(如"贸易谈判""全球升温"),
+		// 已在 0.6 步显式扫描注入,不再经过 shouldKeepTrackerToken 过滤。
+		if !forced && !repeated && !isCompoundKw && !shouldKeepTrackerToken(label) {
 			continue
 		}
 		kind := "keyword"
