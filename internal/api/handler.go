@@ -156,14 +156,30 @@ func (h *Handler) ListTrackers(w http.ResponseWriter, r *http.Request) {
 		limit = 12
 	}
 
-	articles, err := h.repo.ListRecentArticles(r.Context(), window*2, 500)
+	// 拉窗口期内的文章。旧版拉 window*2 是为了 buildTrackerTopics 的 prev 段对比,
+	// 现在改用 snapshot 真实增量,不再需要 prev 段,只拉 window 即可。
+	articles, err := h.repo.ListRecentArticles(r.Context(), window, 500)
 	if err != nil {
 		h.logger.Error("list trackers", "err", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
 		return
 	}
 
-	items := buildTrackerTopics(articles, time.Now(), window, limit)
+	// 一次 SQL 拿所有文章的"窗口起点 vs 当前"真实热度增量。
+	// snapshot 表查询失败不挡主路径:deltas=nil 时 buildTrackerTopics 内部按零值
+	// 兜底,momentum 退化到 flat,排序仍走 acc.Score。
+	windowStart := time.Now().Add(-time.Duration(window) * time.Hour)
+	ids := make([]int64, 0, len(articles))
+	for _, a := range articles {
+		ids = append(ids, a.ID)
+	}
+	deltas, derr := h.repo.GetWindowDeltas(r.Context(), ids, windowStart)
+	if derr != nil {
+		h.logger.Warn("get window deltas failed for /trackers, degrading", "err", derr)
+		deltas = nil
+	}
+
+	items := buildTrackerTopics(articles, deltas, window, limit)
 	writeJSON(w, http.StatusOK, trackerResp{
 		Window: trackerWindow{Hours: window},
 		Items:  items,

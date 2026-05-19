@@ -65,7 +65,9 @@ type trackerStorylineResp struct {
 type trackerAccumulator struct {
 	Label         string
 	Kind          string
-	Score         int64
+	Score         int64 // 绝对热度累加(降级排序信号,snapshot 不可用时用)
+	WindowDelta   int64 // 窗口内真实热度增量累加(基于 snapshot,主排序/momentum 信号)
+	NewCount      int   // 窗口内新出现的关联文章数
 	Count         int
 	Sources       map[string]int
 	RelatedTerms  map[string]struct{}
@@ -189,55 +191,61 @@ var (
 	}
 )
 
-func buildTrackerTopics(articles []model.Article, now time.Time, windowHours, limit int) []trackerTopic {
-	if windowHours <= 0 || windowHours > 168 {
+// buildTrackerTopics 把 articles 按 entity 聚合成首页热点。
+//
+// articles 是窗口期内的文章(handler 已按 window 过滤),deltas 是这些文章
+// 在该窗口内的真实热度增量(基于 article_heat_snapshots 的首尾差);
+// deltas 跟 articles 同 id 集合,nil 时降级 — 每个 entity 的 WindowDelta=0、
+// NewCount=0,momentum 退化到 flat,排序仍可走 acc.Score 兜底。
+//
+// 历史:旧实现把 articles 按 fetched_at 切两段(recent / prev),用 prev 段的
+// acc.Score 跟 recent 段比。但 acc.Score 是 scoreArticle 的累加(永远≥10000),
+// 跨段比较时新文章进入会让 recent.Score > prev.Score 几乎稳定成立 → 全 up
+// 偏置。改用 snapshot 真实增量后,跟 storyline 端语义一致(都是 detectMomentum
+// 的 scoreDelta + newCount 模型),首页和实体页同一 term 不再矛盾。
+func buildTrackerTopics(
+	articles []model.Article,
+	deltas []WindowDelta,
+	windowHours, limit int,
+) []trackerTopic {
+	if windowHours <= 0 || windowHours > 720 {
 		windowHours = 24
 	}
-	window := time.Duration(windowHours) * time.Hour
-	recentCutoff := now.Add(-window)
-	prevCutoff := now.Add(-2 * window)
 
-	recentAccs := map[string]*trackerAccumulator{}
-	prevAccs := map[string]*trackerAccumulator{}
-	recentSeen := make(map[int64]map[string]struct{}, len(articles))
-	prevSeen := make(map[int64]map[string]struct{}, len(articles))
-
-	for _, article := range articles {
-		switch {
-		case !article.FetchedAt.Before(recentCutoff):
-			accumulateTrackerTopics(recentAccs, recentSeen, article)
-		case !article.FetchedAt.Before(prevCutoff):
-			accumulateTrackerTopics(prevAccs, prevSeen, article)
-		}
+	// deltas → map: articleID → WindowDelta,O(1) 查询
+	deltaByID := make(map[int64]WindowDelta, len(deltas))
+	for _, d := range deltas {
+		deltaByID[d.ArticleID] = d
 	}
 
-	items := make([]trackerTopic, 0, len(recentAccs))
-	for key, acc := range recentAccs {
+	accs := map[string]*trackerAccumulator{}
+	seen := make(map[int64]map[string]struct{}, len(articles))
+
+	for _, article := range articles {
+		// deltaByID 找不到时返回零值 WindowDelta,Delta=0 IsNewInWindow=false,
+		// accumulator 内累加 0 不影响其它 acc 字段 — 安全降级。
+		accumulateTrackerTopics(accs, seen, article, deltaByID[article.ID])
+	}
+
+	items := make([]trackerTopic, 0, len(accs))
+	for _, acc := range accs {
 		if acc.Count < 2 {
 			continue
 		}
+		// 以前用 acc.Score == 0 过滤,现在还按这个走,确保 entity 至少有热度数据
 		if acc.Score == 0 {
 			continue
 		}
-		prev := prevAccs[key]
-		prevScore := int64(0)
-		prevCount := 0
-		if prev != nil {
-			prevScore = prev.Score
-			prevCount = prev.Count
-		}
-		scoreDelta := acc.Score - prevScore
-		countDelta := acc.Count - prevCount
 		items = append(items, trackerTopic{
 			Label:         acc.Label,
 			Kind:          acc.Kind,
 			Score:         acc.Score,
-			PrevScore:     prevScore,
-			ScoreDelta:    scoreDelta,
+			PrevScore:     0, // 已不用双窗口对比,字段保留为兼容老前端
+			ScoreDelta:    acc.WindowDelta,
 			Count:         acc.Count,
-			PrevCount:     prevCount,
-			CountDelta:    countDelta,
-			Momentum:      detectMomentum(scoreDelta, countDelta),
+			PrevCount:     0,
+			CountDelta:    acc.NewCount,
+			Momentum:      detectMomentum(acc.WindowDelta, acc.NewCount),
 			Sources:       flattenTrackerSources(acc.Sources),
 			RelatedTerms:  flattenTrackerTerms(acc.RelatedTerms, 4),
 			SampleArticle: acc.SampleArticle,
@@ -245,6 +253,7 @@ func buildTrackerTopics(articles []model.Article, now time.Time, windowHours, li
 	}
 
 	sort.Slice(items, func(i, j int) bool {
+		// momentum rank: up=0, flat=1, down=2 → 升温话题排前面
 		if items[i].Momentum != items[j].Momentum {
 			return trackerMomentumRank(items[i].Momentum) < trackerMomentumRank(items[j].Momentum)
 		}
@@ -274,6 +283,7 @@ func accumulateTrackerTopics(
 	accs map[string]*trackerAccumulator,
 	articleSeen map[int64]map[string]struct{},
 	article model.Article,
+	delta WindowDelta, // 该文章在窗口内的真实热度增量;零值表示 snapshot 不可用
 ) {
 	candidates := extractTrackerCandidates(article)
 	if len(candidates) == 0 {
@@ -305,6 +315,10 @@ func accumulateTrackerTopics(
 
 		acc.Count++
 		acc.Score += scoreArticle(article)
+		acc.WindowDelta += delta.Delta
+		if delta.IsNewInWindow {
+			acc.NewCount++
+		}
 		acc.Sources[article.SourceKey]++
 		for _, related := range c.RelatedTerms {
 			if related != acc.Label {
@@ -1248,7 +1262,10 @@ func buildRelatedTrackers(term string, articles []model.Article, limit int) []tr
 		return nil
 	}
 
-	related := buildTrackerTopics(filtered, time.Now(), 24, limit+1)
+	// 这里只用 buildTrackerTopics 提取"相关 entity",不关心 momentum/排序方向 —
+	// 传 deltas=nil,所有 entity 走 acc.Score 兜底排序,够用。如果未来要给"相关
+	// 话题"也加 momentum 标记,再补 GetWindowDeltas 调用。
+	related := buildTrackerTopics(filtered, nil, 24, limit+1)
 	out := make([]trackerTopic, 0, len(related))
 	needle := strings.ToLower(strings.TrimSpace(term))
 	for _, item := range related {
