@@ -111,7 +111,7 @@ var (
 	stopTokens     = map[string]struct{}{
 		"这个": {}, "那个": {}, "一个": {}, "一次": {}, "一些": {}, "一种": {},
 		"我们": {}, "你们": {}, "他们": {}, "大家": {}, "自己": {}, "别人": {},
-		"什么": {}, "哪些": {}, "怎么": {}, "如何": {}, "为什么": {}, "为何": {},
+		"什么": {}, "哪些": {}, "怎么": {}, "如何": {}, "为什么": {}, "为何": {}, "为啥": {},
 		"是否": {}, "能否": {}, "可以": {}, "可能": {}, "应该": {}, "需要": {},
 		"已经": {}, "正在": {}, "一直": {}, "终于": {}, "到底": {}, "竟然": {},
 		"居然": {}, "其实": {}, "原来": {}, "只是": {}, "而已": {}, "之后": {},
@@ -151,6 +151,7 @@ var (
 		// 第四波补:知乎热榜标题常见噪声碎片
 		"工作人员": {}, "什么原因": {}, "什么情况": {},
 		"普通人": {}, "过来人": {}, "年轻人": {},
+		"年度": {}, "季度": {}, "月度": {}, "全年": {},
 		// 长串残骸(切完是奇怪片段)
 		"四具降落伞弹出": {}, "二三线降幅收窄": {},
 		// 比分赛事残骸
@@ -438,6 +439,9 @@ func extractTrackerCandidates(article model.Article) []trackerCandidate {
 
 	ordered := make([]string, 0, 8)
 	poolSeen := map[string]struct{}{}
+	// repeatedTokens 记录在标题中出现 ≥2 次的词(gse 切词后统计)。
+	// 重复出现 = 作者刻意强调的核心话题词,即使长度 ≤3 字也应保留,跳过 weak 过滤。
+	repeatedTokens := map[string]struct{}{}
 	// forcedEntities 由"被《》明确包围的内容"组成,跳过 looksLikeEntity 的
 	// 启发式判定,直接标 entity。这样《给阿嬷的情书》《影·迷》这种作品名就算
 	// 没在词典里也能正确识别为 entity,而不是落到 keyword/被句子检测丢掉。
@@ -489,9 +493,41 @@ func extractTrackerCandidates(article model.Article) []trackerCandidate {
 	collectTrackerLexiconMatches(title, &ordered, poolSeen)
 
 	// 2. 中文分词:用 gse 把标题切成词序列。
-	for _, tok := range segmentTitle(title) {
+	//    先做一遍词频统计,标记出现 ≥2 次的词为 repeatedTokens。
+	//    注意:用 normalizeLexiconAlias(轻量 trim)而非 normalizeTrackerToken(会 weak 过滤),
+	//    否则 weak 词(如"总冠军"3字)在统计阶段就被消灭,永远无法触发重复检测。
+	gseTokens := segmentTitle(title)
+	{
+		freq := map[string]int{}
+		for _, tok := range gseTokens {
+			cleaned := normalizeLexiconAlias(tok)
+			if cleaned == "" || utf8.RuneCountInString(cleaned) < 2 {
+				continue
+			}
+			cleaned = canonicalizeTrackerToken(cleaned)
+			if cleaned == "" {
+				continue
+			}
+			freq[cleaned]++
+		}
+		for tok, count := range freq {
+			if count >= 2 {
+				repeatedTokens[tok] = struct{}{}
+			}
+		}
+	}
+	for _, tok := range gseTokens {
 		normalized := normalizeTrackerToken(tok)
 		if normalized == "" {
+			// 如果 normalizeTrackerToken 过滤了但该词是 repeated,尝试轻量 normalize 后放入 pool
+			cleaned := normalizeLexiconAlias(tok)
+			if cleaned == "" || utf8.RuneCountInString(cleaned) < 2 {
+				continue
+			}
+			cleaned = canonicalizeTrackerToken(cleaned)
+			if _, ok := repeatedTokens[cleaned]; ok && cleaned != "" {
+				appendTrackerPool(&ordered, poolSeen, cleaned)
+			}
 			continue
 		}
 		appendTrackerPool(&ordered, poolSeen, normalized)
@@ -528,7 +564,13 @@ func extractTrackerCandidates(article model.Article) []trackerCandidate {
 	out := make([]trackerCandidate, 0, 6)
 	for _, label := range ordered {
 		_, forced := forcedEntities[label]
-		if !forced && !shouldKeepTrackerToken(label) {
+		_, repeated := repeatedTokens[label]
+		// repeated: 标题中出现 ≥2 次的词,跳过大部分过滤但仍需排除 stopTokens。
+		// stopTokens 里的词(如"回应""发布")即使重复出现也不应该当关键词。
+		if repeated && isGenericRoleToken(label) {
+			repeated = false
+		}
+		if !forced && !repeated && !shouldKeepTrackerToken(label) {
 			continue
 		}
 		kind := "keyword"
