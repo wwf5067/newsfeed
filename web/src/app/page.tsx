@@ -66,6 +66,24 @@ type TrackerResp = {
   items: TrackerTopic[];
 };
 
+type HotlistItem = {
+  id: number;
+  source_key: string;
+  url: string;
+  title: string;
+  heat: string;
+  heat_value: number;
+  prev_heat_value: number;
+  rank: number;
+  rank_change: number;
+  is_new: boolean;
+};
+
+type HotlistResp = {
+  zhihu: HotlistItem[];
+  bilibili: HotlistItem[];
+};
+
 // ======================== Constants ========================
 
 const POLL_INTERVAL_MS = 5 * 60 * 1000;
@@ -115,6 +133,13 @@ async function fetchTrackers(windowHours: number): Promise<TrackerResp> {
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const data: TrackerResp = await res.json();
   return { window: data.window, items: data.items ?? [] };
+}
+
+async function fetchHotlist(): Promise<HotlistResp> {
+  const res = await fetch("/api/v1/hotlist", { cache: "no-store" });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const data: HotlistResp = await res.json();
+  return { zhihu: data.zhihu ?? [], bilibili: data.bilibili ?? [] };
 }
 
 // ======================== Formatters ========================
@@ -366,21 +391,32 @@ function ArticleRow({ article, index }: { article: Article; index: number }) {
 
 // ======================== CompactRow (Hot 榜条目) ========================
 
-function CompactRow({ article, rank }: { article: Article; rank: number }) {
+function CompactRow({ item, rank }: { item: HotlistItem; rank: number }) {
+  const rc = item.rank_change;
+  const isNew = item.is_new;
   return (
     <Link
-      href={`/article?id=${article.id}`}
+      href={`/article?id=${item.id}`}
       className="flex items-center gap-2 border-b border-zinc-50 px-3 py-2 transition last:border-b-0 hover:bg-zinc-50 dark:border-zinc-800/50 dark:hover:bg-zinc-800/50"
     >
       <span className="w-5 shrink-0 text-right font-mono text-[11px] tabular-nums text-zinc-300 dark:text-zinc-600">
         {rank}
       </span>
       <span className="min-w-0 flex-1 line-clamp-2 text-[13px] leading-snug text-zinc-800 dark:text-zinc-200">
-        {article.title}
+        {item.title}
       </span>
-      {(article.heat || article.heat_value > 0) && (
+      {isNew ? (
+        <span className="shrink-0 rounded-full bg-red-600 px-1.5 py-0.5 text-[9px] font-bold leading-none text-white">NEW</span>
+      ) : rc !== 0 ? (
+        <span className={`shrink-0 text-[10px] font-medium tabular-nums ${rc > 0 ? "text-emerald-500 dark:text-emerald-400" : "text-zinc-400"}`}>
+          {rc > 0 ? `↑${rc}` : `↓${Math.abs(rc)}`}
+        </span>
+      ) : (
+        <span className="shrink-0 text-[10px] text-zinc-300 dark:text-zinc-600">→</span>
+      )}
+      {(item.heat || item.heat_value > 0) && (
         <span className="shrink-0 text-[11px] font-medium tabular-nums text-red-500 dark:text-red-400">
-          {article.heat || formatHeat(article.heat_value)}
+          {item.heat || formatHeat(item.heat_value)}
         </span>
       )}
     </Link>
@@ -389,7 +425,7 @@ function CompactRow({ article, rank }: { article: Article; rank: number }) {
 
 // ======================== HotPanel ========================
 
-function HotPanel({ zhihu, bilibili }: { zhihu: Article[]; bilibili: Article[] }) {
+function HotPanel({ zhihu, bilibili }: { zhihu: HotlistItem[]; bilibili: HotlistItem[] }) {
   if (zhihu.length === 0 && bilibili.length === 0) return null;
   return (
     <div className="rounded-lg border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900">
@@ -402,8 +438,8 @@ function HotPanel({ zhihu, bilibili }: { zhihu: Article[]; bilibili: Article[] }
           <div className="border-b border-zinc-50 px-4 py-1 dark:border-zinc-800/60">
             <span className="text-[11px] font-medium text-zinc-400">知乎</span>
           </div>
-          {zhihu.map((a, i) => (
-            <CompactRow key={a.id} article={a} rank={i + 1} />
+          {zhihu.map((item, i) => (
+            <CompactRow key={item.id} item={item} rank={i + 1} />
           ))}
         </>
       )}
@@ -412,8 +448,8 @@ function HotPanel({ zhihu, bilibili }: { zhihu: Article[]; bilibili: Article[] }
           <div className="border-b border-zinc-50 border-t border-t-zinc-200 px-4 py-1 dark:border-zinc-800/60 dark:border-t-zinc-700">
             <span className="text-[11px] font-medium text-zinc-400">B站</span>
           </div>
-          {bilibili.map((a, i) => (
-            <CompactRow key={a.id} article={a} rank={i + 1} />
+          {bilibili.map((item, i) => (
+            <CompactRow key={item.id} item={item} rank={i + 1} />
           ))}
         </>
       )}
@@ -490,6 +526,9 @@ export default function Home() {
   const [topics, setTopics] = useState<TrackerTopic[]>([]);
   const [trackerWindow, setTrackerWindow] = useState(6);
 
+  // 热榜(专用接口,直接按 heat_value 排序,不受 published_at 分页影响)
+  const [hotlist, setHotlist] = useState<HotlistResp>({ zhihu: [], bilibili: [] });
+
   // "全部"Tab + 非搜索 = 话题聚合视图; "知乎"/"B站"Tab 或搜索 = 时间流
   const isTopicView = source === "" && !debouncedQ;
 
@@ -564,20 +603,24 @@ export default function Home() {
     return () => { cancelled = true; clearInterval(timer); };
   }, [trackerWindow, isTopicView]);
 
-  // 话题聚合分组
-  const { grouped, ungrouped, zhihuTop15, bilibiliTop15 } = useMemo(() => {
-    // Hot 榜: 按 heat_value 降序取各来源前 15 条(从全部文章中提取,与分组逻辑无关)
-    const zhihuTop15 = articles
-      .filter((a) => a.source_key === "zhihu_hot" && a.heat_value > 0)
-      .sort((a, b) => b.heat_value - a.heat_value)
-      .slice(0, 15);
-    const bilibiliTop15 = articles
-      .filter((a) => a.source_key === "bilibili_popular" && a.heat_value > 0)
-      .sort((a, b) => b.heat_value - a.heat_value)
-      .slice(0, 15);
+  // 拉取热榜(独立接口,按 heat_value 直接排序,与 articles 分页无关)
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const data = await fetchHotlist();
+        if (!cancelled) setHotlist(data);
+      } catch { /* silent */ }
+    };
+    load();
+    const timer = setInterval(load, POLL_INTERVAL_MS);
+    return () => { cancelled = true; clearInterval(timer); };
+  }, []);
 
+  // 话题聚合分组
+  const { grouped, ungrouped } = useMemo(() => {
     if (!isTopicView || topics.length === 0) {
-      return { grouped: [] as { topic: TrackerTopic; articles: Article[] }[], ungrouped: articles, zhihuTop15, bilibiliTop15 };
+      return { grouped: [] as { topic: TrackerTopic; articles: Article[] }[], ungrouped: articles };
     }
 
     const usedIds = new Set<number>();
@@ -596,7 +639,7 @@ export default function Home() {
     }
 
     const ungrouped = articles.filter((a) => !usedIds.has(a.id));
-    return { grouped, ungrouped, zhihuTop15, bilibiliTop15 };
+    return { grouped, ungrouped };
   }, [articles, topics, isTopicView]);
 
   // 同源 Top 10 排名
@@ -759,13 +802,13 @@ export default function Home() {
               ))}
             </div>
           )}
-          {(zhihuTop15.length > 0 || bilibiliTop15.length > 0 || ungrouped.length > 0) && (
+          {(hotlist.zhihu.length > 0 || hotlist.bilibili.length > 0 || ungrouped.length > 0) && (
             <>
               {grouped.length > 0 && (
                 <div className="mb-4 h-px bg-zinc-200 dark:bg-zinc-800" />
               )}
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                <HotPanel zhihu={zhihuTop15} bilibili={bilibiliTop15} />
+                <HotPanel zhihu={hotlist.zhihu} bilibili={hotlist.bilibili} />
                 {ungrouped.length > 0 && (
                   <div className="rounded-lg border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900">
                     <div className="border-b border-zinc-100 px-4 py-2.5 dark:border-zinc-800">

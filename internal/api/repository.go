@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -405,6 +406,97 @@ ORDER BY priority DESC, created_at DESC
 		out = append(out, a)
 	}
 	return out, rows.Err()
+}
+
+// HotlistItem 热榜条目,包含当前排名及排名变化信息。
+//
+// RankChange > 0 表示上升(如从第5名升到第3名,RankChange=2)。
+// RankChange < 0 表示下降。IsNew=true 表示首次进入该榜(prev_heat_value=0
+// 或上次排名在 topN 之外)。
+type HotlistItem struct {
+	model.Article
+	Rank       int  `json:"rank"`
+	RankChange int  `json:"rank_change"`
+	IsNew      bool `json:"is_new"`
+}
+
+// ListHotlistItems 按 heat_value 降序返回某来源的热榜前 topN 条,
+// 并计算每条相对上一次抓取周期的排名变化。
+//
+// 实现思路:
+//  1. 拉 topN*2 条当前 heat_value 最高的文章(扩大采样池,让 prev 排名计算更准)
+//  2. 将同批文章按 prev_heat_value 降序排序,得到"上次"名次
+//  3. 对当前 top N 里每条文章:
+//     - prev_heat_value=0 或上次名次 > topN → IsNew=true
+//     - 否则 RankChange = prev_rank - current_rank(正=上升,负=下降)
+func (r *Repository) ListHotlistItems(ctx context.Context, sourceKey string, topN int) ([]HotlistItem, error) {
+	if topN <= 0 || topN > 50 {
+		topN = 15
+	}
+	fetchN := topN * 2
+
+	const q = `
+SELECT id, source_key, url, title, content, author,
+       heat, heat_value, prev_heat, prev_heat_value,
+       published_at, fetched_at
+FROM articles
+WHERE source_key = $1 AND heat_value > 0
+ORDER BY heat_value DESC
+LIMIT $2
+`
+	rows, err := r.pool.Query(ctx, q, sourceKey, fetchN)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var all []model.Article
+	for rows.Next() {
+		var a model.Article
+		if err := rows.Scan(&a.ID, &a.SourceKey, &a.URL, &a.Title, &a.Content,
+			&a.Author, &a.Heat, &a.HeatValue, &a.PrevHeat, &a.PrevHeatValue,
+			&a.PublishedAt, &a.FetchedAt); err != nil {
+			return nil, err
+		}
+		all = append(all, a)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	// 按 prev_heat_value 降序排列,得到"上次"名次 id → prevRank(1-based)
+	prevSorted := make([]model.Article, len(all))
+	copy(prevSorted, all)
+	sort.Slice(prevSorted, func(i, j int) bool {
+		return prevSorted[i].PrevHeatValue > prevSorted[j].PrevHeatValue
+	})
+	prevRankByID := make(map[int64]int, len(prevSorted))
+	for i, a := range prevSorted {
+		prevRankByID[a.ID] = i + 1
+	}
+
+	// 取当前 top N 并附上排名变化
+	n := topN
+	if len(all) < n {
+		n = len(all)
+	}
+	out := make([]HotlistItem, 0, n)
+	for i, a := range all[:n] {
+		cur := i + 1
+		prev := prevRankByID[a.ID]
+		isNew := a.PrevHeatValue == 0 || prev > topN
+		rc := 0
+		if !isNew {
+			rc = prev - cur
+		}
+		out = append(out, HotlistItem{
+			Article:    a,
+			Rank:       cur,
+			RankChange: rc,
+			IsNew:      isNew,
+		})
+	}
+	return out, nil
 }
 
 // WindowDelta 一篇文章在 [windowStart, now] 时间窗口内的真实热度增量。

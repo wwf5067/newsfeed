@@ -398,6 +398,40 @@ func (h *Handler) GetArticleKeywords(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"keywords": keywords})
 }
 
+// GetHotlist 返回知乎和B站热榜各 top 条,附带排名变化信息。
+// 参数:
+//
+//	top  默认 15,最大 30
+func (h *Handler) GetHotlist(w http.ResponseWriter, r *http.Request) {
+	top := parseIntDefault(r.URL.Query().Get("top"), 15)
+	if top <= 0 || top > 30 {
+		top = 15
+	}
+
+	zhihu, err := h.repo.ListHotlistItems(r.Context(), "zhihu_hot", top)
+	if err != nil {
+		h.logger.Error("hotlist zhihu", "err", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
+		return
+	}
+	bilibili, err := h.repo.ListHotlistItems(r.Context(), "bilibili_popular", top)
+	if err != nil {
+		h.logger.Error("hotlist bilibili", "err", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
+		return
+	}
+	if zhihu == nil {
+		zhihu = []HotlistItem{}
+	}
+	if bilibili == nil {
+		bilibili = []HotlistItem{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"zhihu":    zhihu,
+		"bilibili": bilibili,
+	})
+}
+
 func parseIntDefault(s string, def int) int {
 	if s == "" {
 		return def
