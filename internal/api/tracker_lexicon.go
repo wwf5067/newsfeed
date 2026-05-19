@@ -56,6 +56,34 @@ var trackerEntityLexicon = []trackerLexiconEntry{
 	{Label: "vivo", Category: "company", Aliases: []string{"vivo", "VIVO"}},
 	{Label: "荣耀", Category: "company", Aliases: []string{"荣耀", "Honor", "honor"}},
 
+	// === 消费品牌(B 站/小红书/抖音高频)===
+	// 选词原则:用户群高频提到 + 不会跟通用词冲突。
+	// 注:小米/华为/苹果/三星 已在硬件科技段;特斯拉/理想/蔚来/小鹏在新能源段。
+	{Label: "戴森", Category: "company", Aliases: []string{"戴森", "Dyson", "dyson"}},
+	{Label: "徕芬", Category: "company", Aliases: []string{"徕芬", "Laifen", "laifen"}},
+	{Label: "追觅", Category: "company", Aliases: []string{"追觅", "Dreame", "dreame"}},
+	{Label: "石头科技", Category: "company", Aliases: []string{"石头科技", "石头扫地机", "Roborock", "roborock"}},
+	{Label: "科沃斯", Category: "company", Aliases: []string{"科沃斯", "Ecovacs", "ecovacs"}},
+	{Label: "海尔", Category: "company", Aliases: []string{"海尔", "Haier", "haier"}},
+	{Label: "美的", Category: "company", Aliases: []string{"美的", "Midea", "midea"}},
+	{Label: "格力", Category: "company", Aliases: []string{"格力", "Gree"}},
+	{Label: "九阳", Category: "company", Aliases: []string{"九阳", "Joyoung"}},
+	{Label: "苏泊尔", Category: "company", Aliases: []string{"苏泊尔", "Supor"}},
+	{Label: "飞利浦", Category: "company", Aliases: []string{"飞利浦", "Philips", "philips"}},
+	{Label: "松下", Category: "company", Aliases: []string{"松下", "Panasonic", "panasonic"}},
+	{Label: "索尼", Category: "company", Aliases: []string{"索尼", "Sony", "SONY"}},
+	{Label: "SK-II", Category: "company", Aliases: []string{"SK-II", "SK2", "sk-ii", "sk2"}},
+	{Label: "雅诗兰黛", Category: "company", Aliases: []string{"雅诗兰黛", "Estee Lauder"}},
+	{Label: "兰蔻", Category: "company", Aliases: []string{"兰蔻", "Lancome", "lancome"}},
+	{Label: "乐高", Category: "company", Aliases: []string{"乐高", "Lego", "LEGO"}},
+	{Label: "宜家", Category: "company", Aliases: []string{"宜家", "IKEA", "ikea"}},
+	{Label: "无印良品", Category: "company", Aliases: []string{"无印良品", "MUJI", "muji"}},
+	{Label: "优衣库", Category: "company", Aliases: []string{"优衣库", "Uniqlo", "UNIQLO", "uniqlo"}},
+	{Label: "ZARA", Category: "company", Aliases: []string{"ZARA", "zara"}},
+	{Label: "耐克", Category: "company", Aliases: []string{"耐克", "Nike", "NIKE"}},
+	{Label: "阿迪达斯", Category: "company", Aliases: []string{"阿迪达斯", "Adidas", "ADIDAS", "adidas"}},
+	{Label: "新百伦", Category: "company", Aliases: []string{"新百伦", "New Balance", "new balance"}},
+
 	// === 新能源汽车 ===
 	{Label: "特斯拉", Category: "company", Aliases: []string{"特斯拉", "Tesla", "tesla"}},
 	{Label: "比亚迪", Category: "company", Aliases: []string{"比亚迪", "BYD", "byd"}},

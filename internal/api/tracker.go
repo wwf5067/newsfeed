@@ -124,6 +124,8 @@ var (
 		"警方": {}, "医院": {}, "学校": {}, "大学": {}, "法院": {}, "检方": {},
 		"相关方": {}, "负责": {}, "值得关注": {},
 		"警察": {}, "平民": {}, "中国人": {}, "中国游客": {}, "游客": {}, "多人": {},
+		// 赛事/比赛连接词:大写英文但没语义价值
+		"VS": {}, "vs": {}, "Vs": {},
 	}
 	entitySuffixes = []string{
 		"公司", "集团", "大学", "医院", "银行", "汽车", "平台", "手机", "芯片", "模型",
@@ -409,27 +411,85 @@ func extractTrackerCandidates(article model.Article) []trackerCandidate {
 // deduplicateCandidateSubstrings 去除候选列表中的子串冗余。
 // 如果 A.Label 是 B.Label 的子串且 A 不是 entity,则移除 A。
 // entity 类型的短词永远保留(如"伊朗"不会被"美以袭击伊朗..."吸收)。
+// deduplicateCandidateSubstrings 去除候选列表中的子串冗余。
+//
+// 规则(两轮处理):
+//
+//	Pass 1: 任何 keyword 包含已识别的 entity Label,丢弃这个 keyword。
+//	  例:已有 entity "普京"+"俄罗斯",keyword "俄罗斯总统普京发表视频讲话" 应被吸收。
+//
+//	Pass 2: 两个 keyword 之间,留更短的(信息浓度高)。
+//	  例:已有 keyword "绑架",候选 "绑架勒索全家" 应被吸收。
+//
+// entity 永不被吸收(地名/品牌/人名属于高价值短词,即使被某 keyword 包含也保留)。
+//
+// 历史:旧实现是反向(短被长吸收),想法是"保留信息丰富的长句"。但实际跑下来
+// 发现长句几乎全是噪声(完整问句、冗余描述),反而高价值实体被嫌短而保留长句。
+// 改成现行规则后,"普京/俄罗斯" 留下,长句被吸收,前 5 个 keyword 信息密度大幅提升。
 func deduplicateCandidateSubstrings(candidates []trackerCandidate) []trackerCandidate {
 	if len(candidates) <= 1 {
 		return candidates
 	}
 	absorbed := make([]bool, len(candidates))
+
+	// Pass 0: 长 entity(> 8 汉字)包含其他更短 entity → 丢长的。
+	// 启发式 entity 判定(hasUpperASCII / entityPrefixes)会把"2526赛季NBA..."
+	// 这类长串误判 entity,而里面真正的实体(NBA/马刺/俄罗斯)已被独立识别。
+	// 词典 Label 最长 6 字,8 字阈值不会误伤。
 	for i := range candidates {
-		if absorbed[i] || candidates[i].Kind == "entity" {
-			continue // entity 不被吸收
+		if candidates[i].Kind != "entity" {
+			continue
+		}
+		if hanRuneCount(candidates[i].Label) <= 8 {
+			continue
 		}
 		for j := range candidates {
-			if i == j || absorbed[j] {
+			if i == j || candidates[j].Kind != "entity" || absorbed[j] {
 				continue
 			}
-			// i 是 j 的子串 → 移除 i
-			if len(candidates[i].Label) < len(candidates[j].Label) &&
-				strings.Contains(candidates[j].Label, candidates[i].Label) {
+			if hanRuneCount(candidates[j].Label) > hanRuneCount(candidates[i].Label) {
+				continue
+			}
+			if strings.Contains(candidates[i].Label, candidates[j].Label) {
 				absorbed[i] = true
 				break
 			}
 		}
 	}
+	// Pass 1: keyword 包含 entity → 丢 keyword
+	for i := range candidates {
+		if candidates[i].Kind == "entity" {
+			continue
+		}
+		for j := range candidates {
+			if i == j || candidates[j].Kind != "entity" {
+				continue
+			}
+			if strings.Contains(candidates[i].Label, candidates[j].Label) {
+				absorbed[i] = true
+				break
+			}
+		}
+	}
+
+	// Pass 2: keyword vs keyword,留短的(更长的被吸收)
+	for i := range candidates {
+		if absorbed[i] || candidates[i].Kind == "entity" {
+			continue
+		}
+		for j := range candidates {
+			if i == j || absorbed[j] || candidates[j].Kind == "entity" {
+				continue
+			}
+			// i 比 j 长,且 j 是 i 的子串 → 移除 i(长的)
+			if len(candidates[i].Label) > len(candidates[j].Label) &&
+				strings.Contains(candidates[i].Label, candidates[j].Label) {
+				absorbed[i] = true
+				break
+			}
+		}
+	}
+
 	out := make([]trackerCandidate, 0, len(candidates))
 	for i, c := range candidates {
 		if !absorbed[i] {
@@ -820,6 +880,19 @@ func looksLikeEntity(token string) bool {
 	if strings.HasPrefix(token, "#") {
 		return true
 	}
+	// 关键防线:如果整个 token 是句子片段或赛事数据描述,即使开头是
+	// "俄罗斯""乐高"等 entity 词,也不应整体当 entity 输出。这种长串的真正实体
+	// 已经通过 lexicon AC 扫描或 gse 切词独立提取出来了,长串保留只会污染候选列表。
+	//
+	// 注意:这个 check 只对 prefix/suffix/hasUpperASCII 这些"启发式判定"生效;
+	// 词典精确命中的 entity(trackerEntityLabelSet)早在函数开头就 return true 了,
+	// 不会到这一步,所以词典里的真实长 Label(如"无印良品")不受影响。
+	if looksLikeSentence(token) {
+		return false
+	}
+	if looksLikeDataLikePhrase(token) {
+		return false
+	}
 	if hasUpperASCII(token) {
 		return true
 	}
@@ -851,8 +924,91 @@ func looksLikeTopicPhrase(token string) bool {
 			return true
 		}
 	}
+	// 长度兜底:4-8 汉字之间的非词典片段才作为短语保留。
+	// 旧上限 12 太宽,会把"俄罗斯总统普京发表视频讲话"这种完整句子放过来,
+	// 配合 looksLikeSentence 一起把句子截断。
 	hanCount := hanRuneCount(token)
-	return hanCount >= 4 && hanCount <= 12
+	return hanCount >= 4 && hanCount <= 8
+}
+
+// dataLikePatterns 识别"伪体育/数据描述"片段,语义上等同于通用统计文案,
+// 不是事件也不是实体,应过滤掉。例:
+//   - "2526赛季英超联赛第37轮"
+//   - "2526赛季NBA季后赛马刺 VS 雷霆"
+//   - "巴西公布世界杯 26 人名单"(已被 looksLikeSentence 拦,这里兜底)
+//
+// 这些 pattern 跟 looksLikeSentence 的差异:
+//   - looksLikeSentence 看动词/疑问句尾,语义偏"叙述句"
+//   - dataLikePatterns 看赛季/轮次/比分等数字描述,语义偏"列表/统计"
+//
+// 不写得太严:只针对"两个数字片段+连接词"这种明确无信息密度的形态。
+var dataLikePatterns = []*regexp.Regexp{
+	// "2526赛季英超联赛第37轮" / "2526赛季NBA季后赛..."
+	regexp.MustCompile(`^\d{2,4}\s*赛季.+第\s*\d+\s*轮`),
+	regexp.MustCompile(`^\d{2,4}\s*赛季`),
+	// "赛季英超联赛第37轮"(头部数字被切掉后剩下的残骸,亦即包含 "赛季...第N轮")
+	regexp.MustCompile(`赛季.{2,8}第\s*\d+\s*轮`),
+	regexp.MustCompile(`第\s*\d+\s*轮`),
+	// "赛季NBA季后赛马刺"(头部年份被切掉的残骸,通用 "赛季...季后赛/联赛/总决赛")
+	regexp.MustCompile(`^赛季.+(季后赛|联赛|总决赛|常规赛)`),
+	// "X 1-0 战胜 Y" 比分赛事描述(单独的 X/Y 已经被 entity 词典/地名识别)
+	regexp.MustCompile(`\d+\s*[-:：]\s*\d+\s*战胜`),
+	// "战胜 + 队名"(头部比分被切掉的残骸,如"战胜伯恩利")
+	regexp.MustCompile(`^战胜.{2,6}$`),
+}
+
+func looksLikeDataLikePhrase(token string) bool {
+	for _, re := range dataLikePatterns {
+		if re.MatchString(token) {
+			return true
+		}
+	}
+	return false
+}
+
+// sentenceVerbInfixes 在 token 中间出现这些动词,几乎一定是 S+V+O 完整句子。
+// 跟 strongVerbs 的区别:strongVerbs 是"独立成词的事件动词"(裁员/患癌),
+// 出现在中间且前后都有内容,意味着这是一个事件描述句子而非短语。
+var sentenceVerbInfixes = []string{
+	"发生", "发表", "发布", "宣布", "回应", "辟谣", "披露",
+	"公布", "证实", "否认", "表态", "回复", "怀疑", "举报",
+	"晒", // 网络新闻常见单字动词:洁丽雅"晒"报案回执 / 网友"晒"图
+}
+
+// sentenceTailQuestions 疑问句尾(trackerTrimSuffixes 已删大部分,这里兜底剩余)。
+var sentenceTailQuestions = []string{
+	"如何", "怎样", "怎么", "为何", "吗", "呢",
+}
+
+// looksLikeSentence 判定 token 是否看起来是完整句子片段而非实体或短语。
+// 任一信号命中即认为是句子,应当从 keyword 候选中剔除:
+//   - 长度过长(> 10 个汉字,词典命中的 entity 不会到这一步)
+//   - rune 总数过长(> 14,覆盖中英文混合赛事描述如 "2526赛季NBA季后赛马刺 VS 雷霆")
+//   - 含完整谓语动词模式("X 发表 Y" / "X 公布 Y")
+//   - 疑问句尾("...如何""...怎样")
+//   - 含数字+空格+连接词(赛事比分描述如"赛季英超联赛第37轮")
+func looksLikeSentence(token string) bool {
+	hanCount := hanRuneCount(token)
+	if hanCount > 10 {
+		return true
+	}
+	// rune 总长度兜底:中英文混合 + 长度 > 14 个 rune,基本是赛事/事件描述句
+	if utf8.RuneCountInString(token) > 14 {
+		return true
+	}
+	for _, v := range sentenceVerbInfixes {
+		idx := strings.Index(token, v)
+		if idx > 0 && idx+len(v) < len(token) {
+			// 中间出现谓语动词,前后都有内容 → S+V+O
+			return true
+		}
+	}
+	for _, q := range sentenceTailQuestions {
+		if strings.HasSuffix(token, q) {
+			return true
+		}
+	}
+	return false
 }
 
 func shouldKeepTrackerToken(token string) bool {
@@ -861,6 +1017,12 @@ func shouldKeepTrackerToken(token string) bool {
 	}
 	if looksLikeEntity(token) {
 		return true
+	}
+	if looksLikeDataLikePhrase(token) {
+		return false
+	}
+	if looksLikeSentence(token) {
+		return false
 	}
 	return looksLikeTopicPhrase(token)
 }
