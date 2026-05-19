@@ -3,6 +3,7 @@
 import { Suspense, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
+import { useIdSet, READ_KEY } from "@/lib/useIdSet";
 
 type Subscription = {
   id: number;
@@ -206,6 +207,9 @@ function TrackerPageContent() {
   const [subscribeMsg, setSubscribeMsg] = useState<string | null>(null);
   const [related, setRelated] = useState<RelatedTrackerResp | null>(null);
   const [subscriptionId, setSubscriptionId] = useState<number | null>(null);
+
+  // 跨页面共享的"已读" id 集合,跟首页用同一个 localStorage key
+  const read = useIdSet(READ_KEY);
 
   useEffect(() => {
     if (!term) {
@@ -417,32 +421,46 @@ function TrackerPageContent() {
                     <span className="text-xs text-zinc-400">{g.items.length} 条</span>
                   </div>
                   <div className="space-y-2">
-                    {g.items.map((item) => (
-                      <Link
-                        key={item.id}
-                        href={`/article?id=${item.id}`}
-                        className="flex items-start gap-3 rounded-lg border border-zinc-200 bg-zinc-50 px-4 py-3 transition hover:border-zinc-300 hover:bg-white dark:border-zinc-800 dark:bg-zinc-950 dark:hover:border-zinc-700 dark:hover:bg-zinc-900"
-                      >
-                        <div className="min-w-0 flex-1">
-                          <div className="text-sm font-medium leading-snug text-zinc-900 dark:text-zinc-100">
-                            {item.title}
-                          </div>
-                          <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-zinc-500">
-                            <span>{SOURCE_LABELS[item.source_key] ?? item.source_key}</span>
-                            <span>
-                              {g.key === "today" || g.key === "yesterday"
-                                ? formatTimeShort(item.published_at)
-                                : formatDateShort(item.published_at)}
-                            </span>
-                            {(item.heat || item.heat_value > 0) && (
-                              <span className="font-medium text-red-500 tabular-nums dark:text-red-400">
-                                {item.heat || formatHeat(item.heat_value)}
+                    {g.items.map((item) => {
+                      const isRead = read.ids.has(item.id);
+                      return (
+                        <Link
+                          key={item.id}
+                          href={`/article?id=${item.id}`}
+                          onClick={() => read.add(item.id)}
+                          className={
+                            "flex items-start gap-3 rounded-lg border border-zinc-200 bg-zinc-50 px-4 py-3 transition hover:border-zinc-300 hover:bg-white dark:border-zinc-800 dark:bg-zinc-950 dark:hover:border-zinc-700 dark:hover:bg-zinc-900" +
+                            (isRead ? " opacity-60" : "")
+                          }
+                        >
+                          <div className="min-w-0 flex-1">
+                            <div
+                              className={
+                                "text-sm font-medium leading-snug " +
+                                (isRead
+                                  ? "text-zinc-500 dark:text-zinc-500"
+                                  : "text-zinc-900 dark:text-zinc-100")
+                              }
+                            >
+                              {item.title}
+                            </div>
+                            <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-zinc-500">
+                              <span>{SOURCE_LABELS[item.source_key] ?? item.source_key}</span>
+                              <span>
+                                {g.key === "today" || g.key === "yesterday"
+                                  ? formatTimeShort(item.published_at)
+                                  : formatDateShort(item.published_at)}
                               </span>
-                            )}
+                              {(item.heat || item.heat_value > 0) && (
+                                <span className="font-medium text-red-500 tabular-nums dark:text-red-400">
+                                  {item.heat || formatHeat(item.heat_value)}
+                                </span>
+                              )}
+                            </div>
                           </div>
-                        </div>
-                      </Link>
-                    ))}
+                        </Link>
+                      );
+                    })}
                   </div>
                 </div>
               ))}

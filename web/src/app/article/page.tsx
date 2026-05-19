@@ -12,6 +12,7 @@
 import { Suspense, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import Link from "next/link";
+import { useIdSet, READ_KEY } from "@/lib/useIdSet";
 
 type Article = {
   id: number;
@@ -151,6 +152,10 @@ function ArticleContent() {
   const [submitting, setSubmitting] = useState(false);
   const [subscribeMsg, setSubscribeMsg] = useState<string | null>(null);
 
+  // 跨页面共享的"已读"标记。从分享链接直达详情页的用户也会被标记,
+  // 跳回首页时该卡片已是 read 状态。
+  const read = useIdSet(READ_KEY);
+
   useEffect(() => {
     if (!id) {
       setError("missing_id");
@@ -171,7 +176,10 @@ function ArticleContent() {
         }
         if (!aRes.ok) throw new Error(`HTTP ${aRes.status}`);
         const data: Article = await aRes.json();
-        if (!cancelled) setArticle(data);
+        if (!cancelled) {
+          setArticle(data);
+          read.add(data.id); // 从任何路径(分享链接 / 首页 / 实体页)进详情页都标已读
+        }
         if (hRes.ok) {
           const hData: { items: HeatPoint[] } = await hRes.json();
           if (!cancelled) setHistory(hData.items ?? []);

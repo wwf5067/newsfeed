@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback, useRef, useMemo } from "react";
 import Link from "next/link";
+import { useIdSet, READ_KEY, STARRED_KEY } from "@/lib/useIdSet";
 
 // ======================== Types ========================
 
@@ -177,22 +178,6 @@ function HeatBadge({ sourceKey, heat, value, prevValue }: { sourceKey: string; h
       </span>
     </>
   );
-}
-
-// ======================== useIdSet (已读/收藏) ========================
-
-function useIdSet(storageKey: string) {
-  const [ids, setIds] = useState<Set<number>>(new Set());
-  useEffect(() => {
-    try {
-      const raw = localStorage.getItem(storageKey);
-      if (raw) { const parsed = JSON.parse(raw); if (Array.isArray(parsed)) setIds(new Set(parsed.filter((x) => typeof x === "number"))); }
-    } catch { /* ignore */ }
-  }, [storageKey]);
-  const persist = useCallback((next: Set<number>) => { try { localStorage.setItem(storageKey, JSON.stringify([...next])); } catch { /* ignore */ } }, [storageKey]);
-  const add = useCallback((id: number) => { setIds((prev) => { if (prev.has(id)) return prev; const next = new Set(prev); next.add(id); persist(next); return next; }); }, [persist]);
-  const toggle = useCallback((id: number) => { setIds((prev) => { const next = new Set(prev); if (next.has(id)) next.delete(id); else next.add(id); persist(next); return next; }); }, [persist]);
-  return { ids, add, toggle };
 }
 
 // ======================== Announcement Bar ========================
@@ -457,8 +442,8 @@ export default function Home() {
   const [subOpen, setSubOpen] = useState(false);
 
   // 已读/收藏
-  const read = useIdSet("read_ids");
-  const starred = useIdSet("starred_ids");
+  const read = useIdSet(READ_KEY);
+  const starred = useIdSet(STARRED_KEY);
 
   // 分享
   const [toast, setToast] = useState<string | null>(null);
