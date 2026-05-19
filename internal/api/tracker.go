@@ -123,6 +123,7 @@ var (
 		"村民": {}, "村庄": {}, "工厂": {}, "公司": {}, "企业": {}, "政府": {},
 		"警方": {}, "医院": {}, "学校": {}, "大学": {}, "法院": {}, "检方": {},
 		"相关方": {}, "负责": {}, "值得关注": {},
+		"警察": {}, "平民": {}, "中国人": {}, "中国游客": {}, "游客": {}, "多人": {},
 	}
 	entitySuffixes = []string{
 		"公司", "集团", "大学", "医院", "银行", "汽车", "平台", "手机", "芯片", "模型",
@@ -157,6 +158,7 @@ var (
 		"坠毁": {}, "翻车": {}, "泄漏": {}, "污染": {}, "造假": {}, "贪腐": {},
 		"霸凌": {}, "性侵": {}, "家暴": {}, "虐待": {}, "诈骗": {}, "洗钱": {},
 		"降价": {}, "涨价": {}, "崩盘": {}, "熔断": {}, "退市": {}, "暴跌": {},
+		"持枪": {},
 	}
 	topicSuffixes = []string{
 		"事件", "计划", "政策", "比赛", "决赛", "演唱会", "电影", "电视剧", "综艺", "事故",
@@ -812,6 +814,9 @@ func looksLikeEntity(token string) bool {
 	if _, ok := strongGeoNames[token]; ok {
 		return true
 	}
+	if isGenericRoleToken(token) {
+		return false
+	}
 	if strings.HasPrefix(token, "#") {
 		return true
 	}
@@ -838,6 +843,9 @@ func looksLikeTopicPhrase(token string) bool {
 	if token == "" || looksLikeEntity(token) {
 		return false
 	}
+	if _, ok := strongVerbs[token]; ok {
+		return true
+	}
 	for _, suffix := range topicSuffixes {
 		if strings.HasSuffix(token, suffix) {
 			return true
@@ -848,10 +856,18 @@ func looksLikeTopicPhrase(token string) bool {
 }
 
 func shouldKeepTrackerToken(token string) bool {
+	if isGenericRoleToken(token) {
+		return false
+	}
 	if looksLikeEntity(token) {
 		return true
 	}
 	return looksLikeTopicPhrase(token)
+}
+
+func isGenericRoleToken(token string) bool {
+	_, ok := stopTokens[token]
+	return ok
 }
 
 func collectTrackerRelatedTerms(tokens []string, label string) []string {
