@@ -435,12 +435,24 @@ func (r *Repository) ListHotlistItems(ctx context.Context, sourceKey string, top
 	}
 	fetchN := topN * 2
 
+	// 用 DISTINCT ON (title) 去重:同一标题只保留 heat_value 最大的那条。
+	// 微博源历史上 URL 含 band_rank 不稳定,导致 DB 里同一热搜词被存成多行
+	// (commit 7f73981 已修但存量数据还在),首页 hotlist 直接 SQL 去重最干净。
+	// 子查询排序:title ASC + heat_value DESC,DISTINCT ON 保留每组首行 = 最热那条;
+	// 外层 ORDER BY heat_value DESC 让最终结果按热度正常排序。
 	const q = `
 SELECT id, source_key, url, title, content, author,
        heat, heat_value, prev_heat, prev_heat_value,
        published_at, fetched_at
-FROM articles
-WHERE source_key = $1 AND heat_value > 0
+FROM (
+    SELECT DISTINCT ON (title)
+           id, source_key, url, title, content, author,
+           heat, heat_value, prev_heat, prev_heat_value,
+           published_at, fetched_at
+    FROM articles
+    WHERE source_key = $1 AND heat_value > 0
+    ORDER BY title, heat_value DESC
+) AS dedup
 ORDER BY heat_value DESC
 LIMIT $2
 `
