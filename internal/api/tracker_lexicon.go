@@ -326,6 +326,56 @@ var trackerEntityLexicon = []trackerLexiconEntry{
 	{Label: "茅台", Category: "company", Aliases: []string{"茅台", "贵州茅台", "Moutai", "moutai"}},
 	{Label: "比特币", Category: "company", Aliases: []string{"比特币", "Bitcoin", "bitcoin", "BTC", "btc"}},
 	{Label: "以太坊", Category: "company", Aliases: []string{"以太坊", "Ethereum", "ethereum", "ETH"}},
+	{Label: "洁丽雅", Category: "company", Aliases: []string{"洁丽雅"}},
+
+	// === 补充消费/国民品牌(热搜高频) ===
+	// 食品饮料
+	{Label: "瑞幸", Category: "company", Aliases: []string{"瑞幸", "瑞幸咖啡", "Luckin", "luckin"}},
+	{Label: "蜜雪冰城", Category: "company", Aliases: []string{"蜜雪冰城", "蜜雪"}},
+	{Label: "喜茶", Category: "company", Aliases: []string{"喜茶", "HEYTEA", "heytea"}},
+	{Label: "奈雪", Category: "company", Aliases: []string{"奈雪", "奈雪的茶"}},
+	{Label: "星巴克", Category: "company", Aliases: []string{"星巴克", "Starbucks", "starbucks"}},
+	{Label: "麦当劳", Category: "company", Aliases: []string{"麦当劳", "McDonald", "mcdonald", "金拱门"}},
+	{Label: "肯德基", Category: "company", Aliases: []string{"肯德基", "KFC", "kfc"}},
+	{Label: "海底捞", Category: "company", Aliases: []string{"海底捞", "Haidilao"}},
+	{Label: "农夫山泉", Category: "company", Aliases: []string{"农夫山泉"}},
+	{Label: "伊利", Category: "company", Aliases: []string{"伊利"}},
+	{Label: "蒙牛", Category: "company", Aliases: []string{"蒙牛"}},
+	{Label: "娃哈哈", Category: "company", Aliases: []string{"娃哈哈", "Wahaha"}},
+	{Label: "可口可乐", Category: "company", Aliases: []string{"可口可乐", "Coca-Cola", "coca-cola"}},
+	{Label: "百事可乐", Category: "company", Aliases: []string{"百事可乐", "百事", "Pepsi", "pepsi"}},
+	{Label: "元气森林", Category: "company", Aliases: []string{"元气森林"}},
+	{Label: "依云", Category: "company", Aliases: []string{"依云", "Evian", "evian"}},
+	// 日化/个护
+	{Label: "花西子", Category: "company", Aliases: []string{"花西子"}},
+	{Label: "完美日记", Category: "company", Aliases: []string{"完美日记"}},
+	{Label: "欧莱雅", Category: "company", Aliases: []string{"欧莱雅", "L'Oreal", "loreal"}},
+	{Label: "资生堂", Category: "company", Aliases: []string{"资生堂", "Shiseido", "shiseido"}},
+	// 汽车(补充非新能源)
+	{Label: "奔驰", Category: "company", Aliases: []string{"奔驰", "Mercedes", "mercedes", "Benz"}},
+	{Label: "宝马", Category: "company", Aliases: []string{"宝马", "BMW", "bmw"}},
+	{Label: "奥迪", Category: "company", Aliases: []string{"奥迪", "Audi", "audi"}},
+	{Label: "丰田", Category: "company", Aliases: []string{"丰田", "Toyota", "toyota"}},
+	{Label: "本田", Category: "company", Aliases: []string{"本田", "Honda", "honda"}},
+	{Label: "大众", Category: "company", Aliases: []string{"大众汽车", "Volkswagen", "volkswagen", "VW"}},
+	{Label: "保时捷", Category: "company", Aliases: []string{"保时捷", "Porsche", "porsche"}},
+	// 地产/房企
+	{Label: "恒大", Category: "company", Aliases: []string{"恒大", "恒大集团", "Evergrande"}},
+	{Label: "碧桂园", Category: "company", Aliases: []string{"碧桂园", "Country Garden"}},
+	{Label: "万科", Category: "company", Aliases: []string{"万科", "Vanke"}},
+	{Label: "融创", Category: "company", Aliases: []string{"融创", "融创中国"}},
+	// 快递/物流
+	{Label: "顺丰", Category: "company", Aliases: []string{"顺丰", "顺丰快递", "SF Express"}},
+	{Label: "中通", Category: "company", Aliases: []string{"中通", "中通快递"}},
+	{Label: "圆通", Category: "company", Aliases: []string{"圆通", "圆通快递"}},
+	// 航空
+	{Label: "国航", Category: "company", Aliases: []string{"国航", "中国国航", "Air China"}},
+	{Label: "南航", Category: "company", Aliases: []string{"南航", "中国南方航空"}},
+	{Label: "东航", Category: "company", Aliases: []string{"东航", "中国东方航空", "东方航空"}},
+	// 互联网/科技补充
+	{Label: "滴滴", Category: "company", Aliases: []string{"滴滴", "滴滴出行", "DiDi", "didi"}},
+	{Label: "饿了么", Category: "company", Aliases: []string{"饿了么"}},
+	{Label: "携程", Category: "company", Aliases: []string{"携程", "Ctrip", "Trip.com"}},
 
 	// 地名/国家(补充 strongGeoNames 中没有但词典命中更可靠的)
 	{Label: "新加坡", Category: "place", Aliases: []string{"新加坡", "Singapore", "singapore"}},
