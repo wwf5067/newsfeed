@@ -120,6 +120,9 @@ var (
 		"最新": {}, "最近": {}, "最大": {}, "最小": {}, "最高": {}, "最低": {},
 		"非常": {}, "十分": {}, "极其": {}, "特别": {}, "真的": {}, "确实": {},
 		"内容": {}, "方面": {}, "情况": {}, "事情": {}, "东西": {}, "地方": {},
+		"村民": {}, "村庄": {}, "工厂": {}, "公司": {}, "企业": {}, "政府": {},
+		"警方": {}, "医院": {}, "学校": {}, "大学": {}, "法院": {}, "检方": {},
+		"相关方": {}, "负责": {}, "关注": {}, "值得关注": {},
 	}
 	entitySuffixes = []string{
 		"公司", "集团", "大学", "医院", "银行", "汽车", "平台", "手机", "芯片", "模型",
@@ -301,20 +304,27 @@ func extractTrackerCandidates(article model.Article) []trackerCandidate {
 
 	// 3. 兜底:gse 加载失败 / segment 没产出 / 上面两步都没产出时,
 	//    用原"按标点切 + ASCII token 正则"扫一遍。日常很少进这条分支。
+	segments := trackerTitleSplitRegex.Split(title, -1)
+	for _, segment := range segments {
+		normalized := normalizeTrackerToken(segment)
+		if normalized != "" {
+			appendTrackerPool(&ordered, poolSeen, normalized)
+		}
+		for _, token := range trackerTokenRegex.FindAllString(segment, -1) {
+			normalized = normalizeTrackerToken(token)
+			if normalized == "" {
+				continue
+			}
+			appendTrackerPool(&ordered, poolSeen, normalized)
+		}
+	}
 	if len(ordered) == 0 {
-		segments := trackerTitleSplitRegex.Split(title, -1)
-		for _, segment := range segments {
-			normalized := normalizeTrackerToken(segment)
-			if normalized != "" {
-				appendTrackerPool(&ordered, poolSeen, normalized)
+		for _, token := range trackerTokenRegex.FindAllString(title, -1) {
+			normalized := normalizeTrackerToken(token)
+			if normalized == "" {
+				continue
 			}
-			for _, token := range trackerTokenRegex.FindAllString(segment, -1) {
-				normalized = normalizeTrackerToken(token)
-				if normalized == "" {
-					continue
-				}
-				appendTrackerPool(&ordered, poolSeen, normalized)
-			}
+			appendTrackerPool(&ordered, poolSeen, normalized)
 		}
 	}
 	if len(ordered) == 0 {
@@ -452,17 +462,26 @@ func buildTrackerEntityAliasIndex(entries []trackerLexiconEntry) []trackerLexico
 
 func collectTrackerLexiconMatches(title string, pool *[]string, seen map[string]struct{}) {
 	lowerTitle := strings.ToLower(title)
+	if acMatcher == nil {
+		return
+	}
 	// Aho-Corasick 一次扫描找到所有命中的 alias 索引
 	hits := acMatcher.MatchThreadSafe([]byte(lowerTitle))
 	for _, idx := range hits {
-		label := acPatternLabels[idx]
+		if idx < 0 || idx >= len(acPatternLabels) {
+			continue
+		}
+		alias := acPatternPatterns[idx]
+		if alias == "" {
+			continue
+		}
 		// 短 alias 需要 boundary check(防止 "o1" 匹配 "go123")
 		if acPatternNeedBoundary[idx] {
-			if !containsTrackerAliasWithBoundary(lowerTitle, strings.ToLower(label)) {
+			if !containsTrackerAliasWithBoundary(lowerTitle, alias) {
 				continue
 			}
 		}
-		appendTrackerPool(pool, seen, label)
+		appendTrackerPool(pool, seen, acPatternLabels[idx])
 	}
 }
 
@@ -586,6 +605,9 @@ func normalizeTrackerToken(token string) string {
 	if isAllDigits(token) {
 		return ""
 	}
+	if looksLikeNumericMeasure(token) {
+		return ""
+	}
 	if !containsHanOrLetter(token) {
 		return ""
 	}
@@ -605,6 +627,34 @@ func isAllDigits(s string) bool {
 		}
 	}
 	return true
+}
+
+func looksLikeNumericMeasure(token string) bool {
+	if token == "" {
+		return false
+	}
+	runes := []rune(token)
+	if len(runes) < 2 {
+		return false
+	}
+	digits := 0
+	for _, r := range runes {
+		if unicode.IsDigit(r) {
+			digits++
+		}
+	}
+	if digits == 0 {
+		return false
+	}
+	if digits*2 < len(runes) {
+		return false
+	}
+	for _, suffix := range []string{"人", "名", "例", "岁", "年", "天", "家", "次", "%", "万", "亿", "元", "斤", "公里", "小时"} {
+		if strings.HasSuffix(token, suffix) {
+			return true
+		}
+	}
+	return false
 }
 
 func containsHanOrLetter(s string) bool {

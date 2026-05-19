@@ -278,17 +278,20 @@ var (
 	acMatcher *ahocorasick.Matcher
 	// acPatternLabels 索引→Label 映射:acMatcher.Match 返回的整数是 patterns 数组下标
 	acPatternLabels []string
+	// acPatternPatterns 索引→命中的原始 alias(lower-case)
+	acPatternPatterns []string
 	// acPatternNeedBoundary 索引→是否需要 boundary check
 	acPatternNeedBoundary []bool
 )
 
 func init() {
-	acMatcher, acPatternLabels, acPatternNeedBoundary = buildACMatcher(trackerEntityLexicon)
+	acMatcher, acPatternLabels, acPatternPatterns, acPatternNeedBoundary = buildACMatcher(trackerEntityLexicon)
 }
 
-func buildACMatcher(entries []trackerLexiconEntry) (*ahocorasick.Matcher, []string, []bool) {
+func buildACMatcher(entries []trackerLexiconEntry) (*ahocorasick.Matcher, []string, []string, []bool) {
 	var patterns []string
 	var labels []string
+	var rawPatterns []string
 	var needBoundary []bool
 
 	seen := map[string]struct{}{}
@@ -308,6 +311,7 @@ func buildACMatcher(entries []trackerLexiconEntry) (*ahocorasick.Matcher, []stri
 			}
 			seen[lower] = struct{}{}
 			patterns = append(patterns, lower)
+			rawPatterns = append(rawPatterns, lower)
 			labels = append(labels, label)
 			// 短纯英文 alias(如 "o1","cs2")需要 boundary check 防止误匹配
 			needBoundary = append(needBoundary, len(lower) <= 3 && isASCII(lower))
@@ -315,7 +319,7 @@ func buildACMatcher(entries []trackerLexiconEntry) (*ahocorasick.Matcher, []stri
 	}
 
 	matcher := ahocorasick.NewStringMatcher(patterns)
-	return matcher, labels, needBoundary
+	return matcher, labels, rawPatterns, needBoundary
 }
 
 func isASCII(s string) bool {
