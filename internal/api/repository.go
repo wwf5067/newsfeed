@@ -132,7 +132,12 @@ WHERE id = $1
 	return &a, nil
 }
 
-// ListRecentArticles 拉最近 windowHours 小时内的文章,用于热点/实体聚合。
+// ListRecentArticles 拉最近 windowHours 小时内"首次出现"的文章,用于热点/实体聚合。
+//
+// 这里使用 published_at 而不是 fetched_at:
+// - fetched_at 会在每次抓取时刷新,会让长期在榜内容在 3h/6h/24h 都持续命中
+// - published_at 在首次写入后锁定(上榜/首次看到时间语义),更符合窗口统计预期
+//   (3h 应主要看近 3h 新进入视野的事件与实体)
 func (r *Repository) ListRecentArticles(ctx context.Context, windowHours, limit int) ([]model.Article, error) {
 	if windowHours <= 0 || windowHours > 168 {
 		windowHours = 24
@@ -145,7 +150,7 @@ SELECT id, source_key, url, title, content, author,
        heat, heat_value, prev_heat, prev_heat_value,
        published_at, fetched_at
 FROM articles
-WHERE fetched_at >= NOW() - make_interval(hours => $1)
+WHERE published_at >= NOW() - make_interval(hours => $1)
 ORDER BY heat_value DESC NULLS LAST, published_at DESC
 LIMIT $2
 `

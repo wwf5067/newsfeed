@@ -242,14 +242,7 @@ const LEVEL_CLASSES: Record<Announcement["level"], string> = {
   info: "border-blue-200 bg-blue-50 text-blue-800 dark:border-blue-800/70 dark:bg-blue-950/40 dark:text-blue-300",
   warn: "border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-800/70 dark:bg-amber-950/40 dark:text-amber-300",
   critical: "border-red-200 bg-red-50 text-red-800 dark:border-red-800/70 dark:bg-red-950/40 dark:text-red-300",
-  quote: "border-zinc-200 bg-zinc-50 text-zinc-700 italic dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300",
-};
-
-const LEVEL_META: Record<Announcement["level"], { tag: string; icon: string }> = {
-  info: { tag: "提示", icon: "ℹ" },
-  warn: { tag: "注意", icon: "⚠" },
-  critical: { tag: "紧急", icon: "⛔" },
-  quote: { tag: "引用", icon: "✦" },
+  quote: "border-zinc-200 bg-zinc-50 text-zinc-700 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300",
 };
 
 function AnnouncementBar() {
@@ -297,16 +290,13 @@ function AnnouncementBar() {
       <div className="space-y-2">
         {visible.map((a) => (
           <section key={a.id} className={`rounded-lg border shadow-sm ${LEVEL_CLASSES[a.level]}`}>
-            <div className="flex items-center gap-2 px-3 py-2.5">
-              <span className="text-xs font-semibold tracking-wide">{LEVEL_META[a.level].icon}</span>
-              <span className="rounded-full bg-white/70 px-2 py-0.5 text-[11px] font-medium dark:bg-zinc-900/60">{LEVEL_META[a.level].tag}</span>
-              <span className="text-[11px] opacity-70">P{a.priority}</span>
-              <button type="button" onClick={() => dismiss(a.id)} aria-label="关闭" className="ml-auto rounded p-1 opacity-60 transition hover:bg-black/5 hover:opacity-100 dark:hover:bg-white/10">
+            <div className="flex items-start gap-2 px-3 py-2.5">
+              <div className="min-w-0 flex-1 text-[13px] leading-relaxed whitespace-pre-wrap break-words">
+                {a.content}
+              </div>
+              <button type="button" onClick={() => dismiss(a.id)} aria-label="关闭" className="shrink-0 rounded p-1 opacity-60 transition hover:bg-black/5 hover:opacity-100 dark:hover:bg-white/10">
                 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" className="h-4 w-4" fill="currentColor"><path d="M6.28 5.22a.75.75 0 0 0-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 1 0 1.06 1.06L10 11.06l3.72 3.72a.75.75 0 1 0 1.06-1.06L11.06 10l3.72-3.72a.75.75 0 0 0-1.06-1.06L10 8.94 6.28 5.22Z" /></svg>
               </button>
-            </div>
-            <div className="border-t border-black/5 px-3 py-2 text-[13px] leading-relaxed whitespace-pre-wrap break-words dark:border-white/10">
-              {a.content}
             </div>
           </section>
         ))}
