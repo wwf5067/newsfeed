@@ -435,20 +435,16 @@ func (r *Repository) ListHotlistItems(ctx context.Context, sourceKey string, top
 	}
 	fetchN := topN * 2
 
-	// 微博源:取最新一次抓取的批次(精确到分钟,容忍 1 分钟内的多次抓取),
-	// 然后按 published_at DESC 排序 — 这是"微博官方榜单顺序",因为 weibo
-	// scraper 在首次入库时按 rank 1 = now、rank 2 = now-1s 偏移 published_at,
-	// COALESCE 锁定后该时间永久反映微博自家排名。不再用 heat_value DESC 是
-	// 因为微博自身 rank 不完全按 heat_value 算(还有互动量 / 关键词权重等)。
-	//
-	// 其它源(知乎/百度):按 heat_value DESC 排即可。
+	// 所有热搜源(知乎/百度/微博)的 scraper 都把官方 rank 编码进 published_at:
+	// rank 1 = now,rank 2 = now-1s,…(配合 COALESCE 锁定后永不变)。
+	// 因此:取最新一次抓取批次,按 published_at DESC 排序 = 各平台官方榜单顺序。
+	// 用 heat_value 排不一定对(知乎/百度/微博 rank 都不完全跟 heat_value 一致,
+	// 还含推荐权重 / 互动量等)。
 	//
 	// 用 DISTINCT ON (title) 去重:同一标题只保留首选那条。微博源历史上 URL
 	// 含 band_rank 不稳定,DB 里同一热搜词被存成多行(commit 7f73981 已修但
 	// 存量数据还在),首页 hotlist 直接 SQL 去重最干净。
-	var q string
-	if sourceKey == "weibo_hot" {
-		q = `
+	const q = `
 WITH latest AS (
     SELECT date_trunc('minute', MAX(fetched_at)) AS cutoff
     FROM articles WHERE source_key = $1
@@ -470,24 +466,6 @@ FROM (
 ORDER BY published_at DESC
 LIMIT $2
 `
-	} else {
-		q = `
-SELECT id, source_key, url, title, content, author,
-       heat, heat_value, prev_heat, prev_heat_value,
-       published_at, fetched_at
-FROM (
-    SELECT DISTINCT ON (title)
-           id, source_key, url, title, content, author,
-           heat, heat_value, prev_heat, prev_heat_value,
-           published_at, fetched_at
-    FROM articles
-    WHERE source_key = $1 AND heat_value > 0
-    ORDER BY title, heat_value DESC
-) AS dedup
-ORDER BY heat_value DESC
-LIMIT $2
-`
-	}
 	rows, err := r.pool.Query(ctx, q, sourceKey, fetchN)
 	if err != nil {
 		return nil, err

@@ -130,23 +130,23 @@ func (b *BaiduHot) Fetch(ctx context.Context) ([]model.Article, error) {
 		return nil, fmt.Errorf("baidu hot list empty: %w", crawler.ErrEmptyData)
 	}
 
-	// 同批次按 hot_score 倒序排,然后给 PublishedAt 做 1 秒间隔的偏移:
-	//   rank 0(最热) → now
-	//   rank 1       → now - 1s
-	//   rank 29      → now - 29s
-	// 配合 crawler/repository.go 的 COALESCE 锁定,首次入库后永不变。
-	// 语义:published_at = "首次上榜时间";同批次内热度高的"看起来"更新,
-	// 这样 ORDER BY published_at DESC 既保证"新热搜进来排到最前",
-	// 又保证"同一批次内热度高的更靠前"。
+	// 用百度 API 返回的 Index 字段(0-based 官方排名)给 PublishedAt 做 1 秒/位
+	// 偏移:rank 0(榜首) → now,rank 1 → now-1s,...
+	// 配合 crawler/repository.go 的 COALESCE 锁定首次后永不变。
+	//
+	// 旧实现按 hotScore desc 自己排序后再偏移 — 这是错的:百度官方排名不完全
+	// 跟 hotScore 数值一致(还含推荐权重 / 时效衰减),按 hotScore 排出来跟
+	// 百度首页看到的顺序对不上。直接用官方 Index 才能跟首页一致。
+	//
+	// API 返回的 items 数组已经按 Index 排好,但保险起见仍按 Index 排一次,
+	// 防止极端情况(API 返回乱序 / 个别 Index 缺失)造成前端排错。
 	sort.SliceStable(items, func(i, j int) bool {
-		si, _ := strconv.ParseInt(items[i].HotScore, 10, 64)
-		sj, _ := strconv.ParseInt(items[j].HotScore, 10, 64)
-		return si > sj
+		return items[i].Index < items[j].Index
 	})
 
 	articles := make([]model.Article, 0, len(items))
 	now := time.Now()
-	for rank, it := range items {
+	for i, it := range items {
 		score, _ := strconv.ParseInt(it.HotScore, 10, 64)
 
 		// 用关键词构造稳定 URL,确保同一热词多次抓取命中同一行(upsert 去重)。
@@ -159,7 +159,7 @@ func (b *BaiduHot) Fetch(ctx context.Context) ([]model.Article, error) {
 			Content:     it.Desc,
 			Heat:        formatBaiduHeat(score),
 			HeatValue:   score,
-			PublishedAt: now.Add(-time.Duration(rank) * time.Second),
+			PublishedAt: now.Add(-time.Duration(i) * time.Second),
 		})
 	}
 	return articles, nil

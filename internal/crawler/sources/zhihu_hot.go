@@ -51,8 +51,8 @@ type zhihuHotResp struct {
 		Target struct {
 			ID         json.Number `json:"id"`
 			Title      string      `json:"title"`
-			URL        string      `json:"url"`         // API 形式: https://api.zhihu.com/questions/123
-			Created    int64       `json:"created"`     // 秒级时间戳
+			URL        string      `json:"url"`     // API 形式: https://api.zhihu.com/questions/123
+			Created    int64       `json:"created"` // 秒级时间戳
 			Excerpt    string      `json:"excerpt"`
 			AuthorName string      `json:"author_name"`
 		} `json:"target"`
@@ -144,7 +144,8 @@ func (z *ZhihuHot) Fetch(ctx context.Context) ([]model.Article, error) {
 	}
 
 	articles := make([]model.Article, 0, len(parsed.Data))
-	for _, item := range parsed.Data {
+	now := time.Now()
+	for rank, item := range parsed.Data {
 		t := item.Target
 		if t.Title == "" {
 			continue
@@ -156,11 +157,16 @@ func (z *ZhihuHot) Fetch(ctx context.Context) ([]model.Article, error) {
 			webURL = "https://www.zhihu.com/question/" + id
 		}
 
-		published := time.Now()
-		if t.Created > 0 {
-			published = time.Unix(t.Created, 0)
-		}
-
+		// PublishedAt 按 API 返回顺序(= 知乎官方榜位)偏移 1 秒/位:
+		//   rank 0(榜首) → now
+		//   rank 1       → now - 1s
+		//   ...
+		// 配合 crawler/repository.go 的 COALESCE 锁定,首次入库后永不变。
+		// 旧版用 t.Created(问题创建时间)是错的:知乎热榜的 rank 1 不一定是
+		// 最新创建的问题,常常是几小时前的老问题被推上热榜,导致前端按
+		// published_at DESC 排序时跟知乎官方榜位完全脱节。
+		// 注意:不再用 t.Created 也意味着用户在前端看到的"发布时间"会变成
+		// "首次上榜被我们抓到的时间",对热榜场景这其实更直观(知道这条何时上榜)。
 		articles = append(articles, model.Article{
 			URL:         webURL,
 			Title:       t.Title,
@@ -168,7 +174,7 @@ func (z *ZhihuHot) Fetch(ctx context.Context) ([]model.Article, error) {
 			Author:      t.AuthorName,
 			Heat:        item.DetailText,
 			HeatValue:   crawler.ParseHeat(item.DetailText),
-			PublishedAt: published,
+			PublishedAt: now.Add(-time.Duration(rank) * time.Second),
 		})
 	}
 
