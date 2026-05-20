@@ -613,7 +613,7 @@ export default function Home() {
     return () => clearInterval(timer);
   }, [refresh]);
 
-  // 拉取话题(仅话题视图模式)
+  // 拉取话题 + 事件聚类(仅话题视图模式,跟随 trackerWindow 切换)
   useEffect(() => {
     if (!isTopicView) { setTopics([]); setEvents([]); return; }
     let cancelled = false;

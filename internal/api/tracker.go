@@ -47,9 +47,9 @@ type trackerTopic struct {
 }
 
 type trackerResp struct {
-	Window trackerWindow        `json:"window"`
-	Items  []trackerTopic       `json:"items"`
-	Events []trackerEventGroup  `json:"events,omitempty"`
+	Window trackerWindow       `json:"window"`
+	Items  []trackerTopic      `json:"items"`
+	Events []trackerEventGroup `json:"events,omitempty"`
 }
 
 // trackerEventGroup 事件聚类结果:多篇相关文章(共享≥2个实体)合并为一个"事件"。
@@ -2093,13 +2093,13 @@ func clusterTrackerEvents(articles []model.Article, heatDiscovered map[string]st
 
 	// Step 1: 每篇文章的实体/关键词集合
 	type articleMeta struct {
-		id         int64
-		title      string
-		sourceKey  string
-		heatValue  int64
-		entities   []string
-		keywords   []string
-		allLabels  map[string]struct{}
+		id        int64
+		title     string
+		sourceKey string
+		heatValue int64
+		entities  []string
+		keywords  []string
+		allLabels map[string]struct{}
 	}
 
 	metas := make([]articleMeta, 0, len(articles))
@@ -2160,10 +2160,30 @@ func clusterTrackerEvents(articles []model.Article, heatDiscovered map[string]st
 		}
 	}
 
-	// 对每对共享 entity 的文章,检查是否共享 ≥2 个 label 再合并
-	// 用 pairCount[i*N+j] 记录 (i,j) 共享 label 数量避免重复检查
+	// hubEntities 是聚类中的"枢纽 entity" — 高频出现在多个不相关事件里。
+	// 它们在 pairCount 里不计数,避免"中俄关系" + "中美关税" + "巴西世界杯"
+	// 通过共享"中国/美国/巴西"等大国名 串成一个超级事件团。
+	// 真正的事件聚类靠"具体小实体"共现来确认(如"普京/俄罗斯/访华"3 个具体词
+	// 同现 → 这是同一事件)。
+	hubEntities := map[string]struct{}{
+		"中国": {}, "美国": {}, "日本": {}, "韩国": {}, "俄罗斯": {},
+		"印度": {}, "英国": {}, "法国": {}, "德国": {},
+		"北京": {}, "上海": {},
+		"AI": {},
+	}
+
+	// 对每对共享 entity 的文章,检查是否共享 ≥2 个非 hub label 再合并。
+	// 阈值仍是 ≥2,但 hub entity 不计数 — 大幅降低误聚类:
+	// 之前实测"中俄关系"事件团聚了 52 篇文章,因为只要"中国"+"美国" 或
+	// "中国"+"巴西" 同现就连边,把"普京访华 / 特朗普关税 / 内马尔回归"
+	// 等多个独立事件串成一个超级事件团。
+	// 现在 "中国/美国/俄罗斯" 等大国名不再充当连接器,真正的事件靠具体小
+	// 实体(普京/访华、内马尔/世界杯、特朗普/关税 等)共现来确认。
 	pairCount := make(map[[2]int]int)
-	for _, idxList := range entityToArticles {
+	for label, idxList := range entityToArticles {
+		if _, isHub := hubEntities[label]; isHub {
+			continue // hub entity 不参与共现计数
+		}
 		if len(idxList) < 2 {
 			continue
 		}
