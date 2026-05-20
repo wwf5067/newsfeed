@@ -217,6 +217,10 @@ func (h *Handler) ListTrackers(w http.ResponseWriter, r *http.Request) {
 		Items:  buildTrackerTopics(articles, deltas, window, limit),
 	}
 
+	// 事件聚类:把共享实体的文章合并为事件组,提升首页信息密度。
+	heatDiscovered := collectHeatDiscoveredWords(articles)
+	resp.Events = clusterTrackerEvents(articles, heatDiscovered, 8)
+
 	// 写入缓存(写锁)。并发场景下可能有多个请求同时穿透到这里,
 	// 最后写入者覆盖前者,结果一致,可接受。
 	h.trackerMu.Lock()
