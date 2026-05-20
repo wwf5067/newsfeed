@@ -62,6 +62,16 @@ type Config struct {
 
 	// 数据保留天数,超过此天数的文章将被自动清理(基于 fetched_at)
 	RetentionDays int
+
+	// === Extractor 服务 ===
+	// 抽取实现:rule(规则) | llm(大模型,尚未实现)
+	ExtractorBackend string
+	// cron 表达式(支持秒位),默认 5 分钟一次
+	ExtractorSchedule string
+	// 每次批处理的文章上限
+	ExtractorBatchSize int
+	// 内部 health 端点(仅本机)
+	ExtractorAddr string
 }
 
 // Load 从环境变量读取配置。缺失必填项会返回错误。
@@ -95,6 +105,11 @@ func Load() (*Config, error) {
 		SiteURL:         getEnv("SITE_URL", "http://localhost:3000"),
 		RunOnStart:      strings.EqualFold(os.Getenv("RUN_ON_START"), "true"),
 		RetentionDays:   getEnvInt("RETENTION_DAYS", 90),
+
+		ExtractorBackend:   getEnv("EXTRACTOR_BACKEND", "rule"),
+		ExtractorSchedule:  getEnv("EXTRACTOR_SCHEDULE", "0 */5 * * * *"),
+		ExtractorBatchSize: getEnvInt("EXTRACTOR_BATCH_SIZE", 50),
+		ExtractorAddr:      getEnv("EXTRACTOR_ADDR", "127.0.0.1:8082"),
 	}
 
 	if cfg.DatabaseURL == "" {
