@@ -1,6 +1,7 @@
 package api
 
 import (
+	"log/slog"
 	"regexp"
 	"sort"
 	"strconv"
@@ -490,9 +491,12 @@ var (
 // 性能:O(N*M) N=文章数 M=平均标题词数,对 500 篇文章 < 50ms,无压力。
 func collectHeatDiscoveredWords(articles []model.Article) map[string]struct{} {
 	const (
-		minArticles = 3 // 至少出现在 3 篇不同文章中
-		minHanLen   = 2 // 最少 2 个汉字
-		maxHanLen   = 4 // 最多 4 个汉字(超过的已能被 looksLikeTopicPhrase 保留)
+		minArticles = 2 // 至少出现在 2 篇不同文章中
+		// 热搜数据源已经是高度筛选的舆论热点,2 篇共现即为有效信号。
+		// 原值 3 在实际生产中难以达到:同一热搜词经 url 去重后全天仅 1 行,
+		// 除非同一词在多个来源(baidu/weibo/zhihu)同时上榜才能超过 1。
+		minHanLen = 2 // 最少 2 个汉字
+		maxHanLen = 4 // 最多 4 个汉字(超过的已能被 looksLikeTopicPhrase 保留)
 	)
 
 	// word → 出现在哪些文章(按 article ID 去重)
@@ -581,6 +585,13 @@ func buildTrackerTopics(
 
 	// 热度反馈式实体发现:跨文章统计词频,高频出现的短词(不在词典中)自动升级为候选。
 	heatDiscovered := collectHeatDiscoveredWords(articles)
+	if len(heatDiscovered) > 0 {
+		words := make([]string, 0, len(heatDiscovered))
+		for w := range heatDiscovered {
+			words = append(words, w)
+		}
+		slog.Default().Debug("heat discovery", "words", words, "count", len(words))
+	}
 
 	accs := map[string]*trackerAccumulator{}
 	seen := make(map[int64]map[string]struct{}, len(articles))
