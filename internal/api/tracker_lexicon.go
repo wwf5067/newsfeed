@@ -159,7 +159,7 @@ var trackerEntityLexicon = []trackerLexiconEntry{
 	// 近期热门综艺
 	{Label: "歌手2024", Category: "ip", Aliases: []string{"歌手2024", "歌手 2024", "歌手2025", "歌手 2025"}},
 	{Label: "声生不息", Category: "ip", Aliases: []string{"声生不息", "声生不息·港乐季", "声生不息·宝岛季"}},
-	{Label: "浪姐", Category: "ip", Aliases: []string{"浪姐", "乘风破浪", "乘风2024", "乘风2023", "乘风破浪的姐姐"}},
+	{Label: "浪姐", Category: "entertainment", Aliases: []string{"浪姐", "乘风破浪", "乘风2024", "乘风2023", "乘风破浪的姐姐"}},
 	{Label: "披哥", Category: "ip", Aliases: []string{"披哥", "披荆斩棘", "披荆斩棘的哥哥"}},
 	{Label: "中国有嘻哈", Category: "ip", Aliases: []string{"中国有嘻哈", "说唱新世代", "中国说唱"}},
 	{Label: "脱口秀大会", Category: "ip", Aliases: []string{"脱口秀大会", "喜剧之王单口季"}},
@@ -456,7 +456,7 @@ var trackerEntityLexicon = []trackerLexiconEntry{
 	{Label: "奥迪", Category: "company", Aliases: []string{"奥迪", "Audi", "audi"}},
 	{Label: "丰田", Category: "company", Aliases: []string{"丰田", "Toyota", "toyota"}},
 	{Label: "本田", Category: "company", Aliases: []string{"本田", "Honda", "honda"}},
-	{Label: "大众", Category: "company", Aliases: []string{"大众汽车", "Volkswagen", "volkswagen", "VW"}},
+	{Label: "大众汽车", Category: "company", Aliases: []string{"大众汽车", "Volkswagen", "volkswagen", "VW"}},
 	{Label: "保时捷", Category: "company", Aliases: []string{"保时捷", "Porsche", "porsche"}},
 	// 地产/房企
 	{Label: "恒大", Category: "company", Aliases: []string{"恒大", "恒大集团", "Evergrande"}},
@@ -485,6 +485,44 @@ var trackerEntityLexicon = []trackerLexiconEntry{
 
 	// 高校补充
 	{Label: "上海财经大学", Category: "place", Aliases: []string{"上海财经大学", "上财"}},
+
+	// === "涉X"模式:政治新闻中高频缩写,关联到对应地区实体 ===
+	// "涉台言论""涉华表态""涉港法案"等标题中,"涉X"应归入对应地区实体。
+	{Label: "台湾", Category: "place", Aliases: []string{"台湾", "涉台", "Taiwan", "taiwan"}},
+	{Label: "香港", Category: "place", Aliases: []string{"香港", "涉港", "Hong Kong", "hong kong"}},
+	{Label: "新疆", Category: "place", Aliases: []string{"新疆", "涉疆"}},
+	{Label: "西藏", Category: "place", Aliases: []string{"西藏", "涉藏"}},
+	{Label: "中华", Category: "place", Aliases: []string{"涉华"}},
+
+	// === 补充高频热搜实体(评估 2025-05 第二批) ===
+	// 综艺/影视奖项
+	{Label: "白玉兰奖", Category: "entertainment", Aliases: []string{"白玉兰奖", "白玉兰", "上海电视节"}},
+	{Label: "金鸡奖", Category: "entertainment", Aliases: []string{"金鸡奖", "金鸡百花", "金鸡百花奖"}},
+	{Label: "金马奖", Category: "entertainment", Aliases: []string{"金马奖", "金马"}},
+	{Label: "金像奖", Category: "entertainment", Aliases: []string{"金像奖", "香港金像奖"}},
+	{Label: "百花奖", Category: "entertainment", Aliases: []string{"百花奖", "大众电影百花奖"}},
+	{Label: "金鹰奖", Category: "entertainment", Aliases: []string{"金鹰奖", "金鹰节", "金鹰电视艺术节"}},
+	{Label: "飞天奖", Category: "entertainment", Aliases: []string{"飞天奖"}},
+	{Label: "华鼎奖", Category: "entertainment", Aliases: []string{"华鼎奖"}},
+	{Label: "奥斯卡", Category: "entertainment", Aliases: []string{"奥斯卡", "Oscar", "oscar", "奥斯卡金像奖", "Academy Awards"}},
+	{Label: "金球奖", Category: "entertainment", Aliases: []string{"金球奖", "Golden Globe", "golden globe"}},
+	{Label: "艾美奖", Category: "entertainment", Aliases: []string{"艾美奖", "Emmy", "emmy"}},
+	{Label: "格莱美", Category: "entertainment", Aliases: []string{"格莱美", "Grammy", "grammy", "格莱美奖"}},
+	{Label: "戛纳", Category: "entertainment", Aliases: []string{"戛纳", "戛纳电影节", "Cannes", "cannes"}},
+	{Label: "威尼斯电影节", Category: "entertainment", Aliases: []string{"威尼斯电影节", "威尼斯"}},
+	{Label: "柏林电影节", Category: "entertainment", Aliases: []string{"柏林电影节", "柏林"}},
+	{Label: "歌手", Category: "entertainment", Aliases: []string{"歌手", "歌手2025", "歌手2026"}},
+
+	// 影视/动漫 IP
+	{Label: "蝙蝠侠", Category: "ip", Aliases: []string{"蝙蝠侠", "Batman", "batman"}},
+	{Label: "超人", Category: "ip", Aliases: []string{"超人", "Superman", "superman"}},
+
+	// 社会话题词(高频且有聚合价值,加词典确保 AC matcher 扫到)
+	{Label: "烈性犬", Category: "event", Aliases: []string{"烈性犬"}},
+
+	// 国际人物补充
+	{Label: "李显龙", Category: "person", Aliases: []string{"李显龙"}},
+	{Label: "马科斯", Category: "person", Aliases: []string{"马科斯", "Marcos", "marcos"}},
 }
 
 var trackerEntityAliasIndex = buildTrackerEntityAliasIndex(trackerEntityLexicon)
