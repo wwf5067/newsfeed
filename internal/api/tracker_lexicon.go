@@ -234,6 +234,29 @@ var trackerEntityLexicon = []trackerLexiconEntry{
 	{Label: "国庆", Category: "event", Aliases: []string{"国庆", "国庆节"}},
 	{Label: "WAIC", Category: "event", Aliases: []string{"WAIC", "waic", "世界人工智能大会"}},
 
+	// === 体育赛事(青年/U系列) ===
+	{Label: "亚洲杯", Category: "event", Aliases: []string{"亚洲杯", "亚足联亚洲杯"}},
+	{Label: "U17亚洲杯", Category: "event", Aliases: []string{"U17亚洲杯", "U17 亚洲杯"}},
+	{Label: "U19亚洲杯", Category: "event", Aliases: []string{"U19亚洲杯", "U19 亚洲杯"}},
+	{Label: "U21亚洲杯", Category: "event", Aliases: []string{"U21亚洲杯", "U21 亚洲杯"}},
+	{Label: "U17世界杯", Category: "event", Aliases: []string{"U17世界杯", "U17 世界杯"}},
+	{Label: "U19世界杯", Category: "event", Aliases: []string{"U19世界杯", "U19 世界杯"}},
+	{Label: "U21世界杯", Category: "event", Aliases: []string{"U21世界杯", "U21 世界杯"}},
+	{Label: "亚冠", Category: "event", Aliases: []string{"亚冠", "亚冠联赛"}},
+	{Label: "中超", Category: "event", Aliases: []string{"中超", "中超联赛"}},
+	{Label: "英超", Category: "event", Aliases: []string{"英超", "英超联赛", "Premier League"}},
+	{Label: "西甲", Category: "event", Aliases: []string{"西甲"}},
+	{Label: "意甲", Category: "event", Aliases: []string{"意甲"}},
+	{Label: "德甲", Category: "event", Aliases: []string{"德甲"}},
+	{Label: "法甲", Category: "event", Aliases: []string{"法甲"}},
+
+	// === 中国国家队(简称在体育新闻高频)===
+	{Label: "国足", Category: "team", Aliases: []string{"国足", "中国男足", "中国国家队"}},
+	{Label: "国奥", Category: "team", Aliases: []string{"国奥", "中国国奥队"}},
+	{Label: "国少", Category: "team", Aliases: []string{"国少", "中国国少队", "U17国少"}},
+	{Label: "国青", Category: "team", Aliases: []string{"国青", "中国国青队", "U19国青"}},
+	{Label: "女足", Category: "team", Aliases: []string{"女足", "中国女足"}},
+
 	// === 政治 / 机构 ===
 	{Label: "联合国", Category: "place", Aliases: []string{"联合国", "UN", "United Nations"}},
 	{Label: "白宫", Category: "place", Aliases: []string{"白宫", "White House"}},
