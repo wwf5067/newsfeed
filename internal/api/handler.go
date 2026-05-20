@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -15,17 +16,38 @@ import (
 	"github.com/wwf5067/newsfeed/internal/subscribe"
 )
 
+// trackerCacheKey 按 window+limit 两个维度缓存 /trackers 结果。
+// 这两个参数完全决定输出,其他请求参数(如 source)暂无,故作为完整 key 使用。
+type trackerCacheKey struct{ window, limit int }
+
+type trackerCacheEntry struct {
+	resp     trackerResp
+	cachedAt time.Time
+}
+
+// trackerCacheTTL 缓存有效期。爬虫最快 15 分钟一次,60s 既能大幅降低 pipeline 重算频率,
+// 也保证新数据在 1 分钟内可见。
+const trackerCacheTTL = 60 * time.Second
+
 // Handler 聚合所有 HTTP 处理器的依赖。
 type Handler struct {
 	logger        *slog.Logger
 	repo          *Repository
 	subscribeRepo *subscribe.Repository // 可选;nil 时订阅 API 返回 503
 	notifyTo      string                // 用于在 list 响应里提示用户邮件发往哪里
+
+	// /trackers 短 TTL 内存缓存:避免每次请求对 500 篇文章跑完整 10 步 pipeline。
+	trackerMu    sync.RWMutex
+	trackerCache map[trackerCacheKey]trackerCacheEntry
 }
 
 // NewHandler 默认构造,不带订阅功能。
 func NewHandler(logger *slog.Logger, repo *Repository) *Handler {
-	return &Handler{logger: logger, repo: repo}
+	return &Handler{
+		logger:       logger,
+		repo:         repo,
+		trackerCache: make(map[trackerCacheKey]trackerCacheEntry),
+	}
 }
 
 // WithSubscribe 注入订阅依赖。返回 *Handler 自身便于链式调用。
@@ -156,6 +178,17 @@ func (h *Handler) ListTrackers(w http.ResponseWriter, r *http.Request) {
 		limit = 12
 	}
 
+	cacheKey := trackerCacheKey{window: window, limit: limit}
+
+	// 先查缓存(读锁):命中且未过期则直接返回,避免重跑完整 pipeline。
+	h.trackerMu.RLock()
+	entry, hit := h.trackerCache[cacheKey]
+	h.trackerMu.RUnlock()
+	if hit && time.Since(entry.cachedAt) < trackerCacheTTL {
+		writeJSON(w, http.StatusOK, entry.resp)
+		return
+	}
+
 	// 拉窗口期内的文章。旧版拉 window*2 是为了 buildTrackerTopics 的 prev 段对比,
 	// 现在改用 snapshot 真实增量,不再需要 prev 段,只拉 window 即可。
 	articles, err := h.repo.ListRecentArticles(r.Context(), window, 500)
@@ -179,11 +212,18 @@ func (h *Handler) ListTrackers(w http.ResponseWriter, r *http.Request) {
 		deltas = nil
 	}
 
-	items := buildTrackerTopics(articles, deltas, window, limit)
-	writeJSON(w, http.StatusOK, trackerResp{
+	resp := trackerResp{
 		Window: trackerWindow{Hours: window},
-		Items:  items,
-	})
+		Items:  buildTrackerTopics(articles, deltas, window, limit),
+	}
+
+	// 写入缓存(写锁)。并发场景下可能有多个请求同时穿透到这里,
+	// 最后写入者覆盖前者,结果一致,可接受。
+	h.trackerMu.Lock()
+	h.trackerCache[cacheKey] = trackerCacheEntry{resp: resp, cachedAt: time.Now()}
+	h.trackerMu.Unlock()
+
+	writeJSON(w, http.StatusOK, resp)
 }
 
 func (h *Handler) GetTrackerStoryline(w http.ResponseWriter, r *http.Request) {
