@@ -868,7 +868,7 @@ export default function Home() {
                 <span className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">发生了什么大事</span>
                 <span className="text-base leading-none">⚡</span>
                 <div className="ml-auto flex gap-0.5">
-                  {[6, 24, 72].map((w) => (
+                  {[3, 6, 24, 72].map((w) => (
                     <button
                       key={w}
                       type="button"
@@ -958,7 +958,7 @@ export default function Home() {
                     events 已有时,这里仍展示一份(操作直觉:每块都能切自己的窗口),
                     state 是同一个 trackerWindow 共享。 */}
                 <div className="ml-auto flex gap-0.5">
-                  {[6, 24, 72].map((w) => (
+                  {[3, 6, 24, 72].map((w) => (
                     <button
                       key={w}
                       type="button"
