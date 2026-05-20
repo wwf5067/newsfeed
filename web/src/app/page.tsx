@@ -858,40 +858,60 @@ export default function Home() {
                   ))}
                 </div>
               </div>
-              <div className="space-y-3">
+              <div className="space-y-2">
                 {events.map((event, i) => (
-                  <div key={i} className="rounded-lg border border-zinc-200 bg-white p-4 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
-                    <div className="mb-2 flex items-start justify-between gap-2">
-                      <h3 className="text-[15px] font-semibold text-zinc-900 dark:text-zinc-100">{event.title}</h3>
-                      <span className="shrink-0 text-sm font-medium tabular-nums text-emerald-600 dark:text-emerald-400">
+                  <div key={i} className="rounded-lg border border-zinc-200 bg-white shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
+                    {/* 事件标题 + 热度 */}
+                    <div className="flex items-center gap-2 px-3 py-2.5">
+                      <h3 className="min-w-0 flex-1 text-[14px] font-semibold leading-snug text-zinc-900 dark:text-zinc-100">{event.title}</h3>
+                      <span className="shrink-0 text-xs font-medium tabular-nums text-emerald-600 dark:text-emerald-400">
                         {formatHeat(event.score)}
                       </span>
                     </div>
-                    <div className="mb-2 flex flex-wrap gap-1.5">
-                      {event.entities.map((e) => (
-                        <Link
-                          key={e}
-                          href={`/tracker?term=${encodeURIComponent(e)}&window=${trackerWindow}`}
-                          className="rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700 hover:bg-amber-100 dark:bg-amber-950 dark:text-amber-300 dark:hover:bg-amber-900"
-                        >
-                          {e}
-                        </Link>
-                      ))}
-                      {event.keywords.map((k) => (
-                        <Link
-                          key={k}
-                          href={`/tracker?term=${encodeURIComponent(k)}&window=${trackerWindow}`}
-                          className="rounded-full bg-zinc-100 px-2 py-0.5 text-xs font-medium text-zinc-600 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-400 dark:hover:bg-zinc-700"
-                        >
-                          {k}
-                        </Link>
-                      ))}
-                    </div>
-                    <div className="flex items-center gap-3 text-xs text-zinc-500 dark:text-zinc-400">
-                      <span>{event.count} 篇相关</span>
-                      <span>·</span>
+                    {/* 实体 / 关键词 chips */}
+                    {(event.entities.length > 0 || event.keywords.length > 0) && (
+                      <div className="flex flex-wrap gap-1 border-t border-zinc-50 px-3 py-1.5 dark:border-zinc-800/50">
+                        {event.entities.map((e) => (
+                          <Link
+                            key={e}
+                            href={`/tracker?term=${encodeURIComponent(e)}&window=${trackerWindow}`}
+                            className="rounded-full bg-amber-50 px-1.5 py-0.5 text-[11px] font-medium text-amber-700 hover:bg-amber-100 dark:bg-amber-950 dark:text-amber-300 dark:hover:bg-amber-900"
+                          >
+                            {e}
+                          </Link>
+                        ))}
+                        {event.keywords.map((k) => (
+                          <span key={k} className="rounded-full bg-zinc-100 px-1.5 py-0.5 text-[11px] text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400">
+                            {k}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                    {/* 相关文章列表(最多3篇,后端已按热度排序) */}
+                    {event.articles.length > 0 && (
+                      <div className="border-t border-zinc-50 dark:border-zinc-800/50">
+                        {event.articles.map((a) => (
+                          <Link
+                            key={a.id}
+                            href={`/article?id=${a.id}`}
+                            className="flex items-center gap-2 border-b border-zinc-50 px-3 py-2 transition last:border-b-0 hover:bg-zinc-50 dark:border-zinc-800/50 dark:hover:bg-zinc-800/50"
+                          >
+                            <span className="min-w-0 flex-1 truncate text-[13px] text-zinc-700 dark:text-zinc-300">{a.title}</span>
+                            <span className="shrink-0 text-[10px] text-zinc-400">{SOURCE_LABELS[a.source_key] ?? a.source_key}</span>
+                            {a.heat_value > 0 && (
+                              <span className="shrink-0 text-[10px] font-medium tabular-nums text-red-500 dark:text-red-400">{formatHeat(a.heat_value)}</span>
+                            )}
+                          </Link>
+                        ))}
+                      </div>
+                    )}
+                    {/* 底部:文章数 + 来源 chips */}
+                    <div className="flex flex-wrap items-center gap-1.5 border-t border-zinc-50 px-3 py-1.5 dark:border-zinc-800/50">
+                      <span className="text-[11px] text-zinc-400">{event.count} 篇</span>
                       {event.sources.map((s) => (
-                        <span key={s.source_key}>{SOURCE_LABELS[s.source_key] ?? s.source_key}({s.count})</span>
+                        <span key={s.source_key} className="rounded bg-zinc-100 px-1.5 py-0.5 text-[10px] text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400">
+                          {SOURCE_LABELS[s.source_key] ?? s.source_key}&nbsp;{s.count}
+                        </span>
                       ))}
                     </div>
                   </div>
