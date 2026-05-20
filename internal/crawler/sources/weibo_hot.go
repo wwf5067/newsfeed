@@ -218,10 +218,10 @@ func parseWeiboHotHTML(html string) []model.Article {
 			heatDisplay = formatWeiboHeat(heatValue)
 		}
 
-		// PublishedAt 按 rank 偏移(rank=1 最热 → now;rank=2 → now-1s ...),
-		// 配合 crawler/repository.go 的 published_at COALESCE 锁定语义,
-		// 首次入库后永久不变,前端按 published_at DESC 即等价按热度 DESC。
-		// rank 解析失败兜底到 now(早期热搜或异常情况),不影响主流程。
+		// SourceRank 单独存,首页 HotPanel 用它按官方榜位排序。
+		// PublishedAt 用 now(同一批次共享时间戳),COALESCE 锁定后表示"该热搜
+		// 首次被我们抓到的时间"— 微博热搜没有"创建时间",这是最佳近似。
+		// 各 tab 按 published_at DESC 排可呈现"最近上榜的在最前"。
 		rankNum, _ := strconv.Atoi(rank)
 		if rankNum < 1 {
 			rankNum = 1
@@ -231,7 +231,8 @@ func parseWeiboHotHTML(html string) []model.Article {
 			Title:       title,
 			Heat:        heatDisplay,
 			HeatValue:   heatValue,
-			PublishedAt: now.Add(-time.Duration(rankNum-1) * time.Second),
+			SourceRank:  rankNum,
+			PublishedAt: now,
 		})
 	}
 

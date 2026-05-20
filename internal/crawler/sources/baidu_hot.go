@@ -130,16 +130,12 @@ func (b *BaiduHot) Fetch(ctx context.Context) ([]model.Article, error) {
 		return nil, fmt.Errorf("baidu hot list empty: %w", crawler.ErrEmptyData)
 	}
 
-	// 用百度 API 返回的 Index 字段(0-based 官方排名)给 PublishedAt 做 1 秒/位
-	// 偏移:rank 0(榜首) → now,rank 1 → now-1s,...
-	// 配合 crawler/repository.go 的 COALESCE 锁定首次后永不变。
-	//
-	// 旧实现按 hotScore desc 自己排序后再偏移 — 这是错的:百度官方排名不完全
-	// 跟 hotScore 数值一致(还含推荐权重 / 时效衰减),按 hotScore 排出来跟
-	// 百度首页看到的顺序对不上。直接用官方 Index 才能跟首页一致。
-	//
-	// API 返回的 items 数组已经按 Index 排好,但保险起见仍按 Index 排一次,
-	// 防止极端情况(API 返回乱序 / 个别 Index 缺失)造成前端排错。
+	// 百度 API 返回的 items 已经按 Index 排好,保险起见再按 Index 排一次,防
+	// 极端 API 乱序。Index 是 0-based 官方榜位,转 1-based 写到 SourceRank。
+	// PublishedAt 用 now(同一批次共享时间戳),COALESCE 锁定后表示"该热搜
+	// 首次被我们抓到的时间"— 对百度热搜没有"问题创建时间",这是最佳近似。
+	// 各 tab 按 published_at DESC 排可呈现"最近上榜的在最前",首页 HotPanel
+	// 单独按 source_rank ASC 排官方榜位。
 	sort.SliceStable(items, func(i, j int) bool {
 		return items[i].Index < items[j].Index
 	})
@@ -159,7 +155,8 @@ func (b *BaiduHot) Fetch(ctx context.Context) ([]model.Article, error) {
 			Content:     it.Desc,
 			Heat:        formatBaiduHeat(score),
 			HeatValue:   score,
-			PublishedAt: now.Add(-time.Duration(i) * time.Second),
+			SourceRank:  i + 1, // 1-based 官方榜位
+			PublishedAt: now,
 		})
 	}
 	return articles, nil

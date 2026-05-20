@@ -435,11 +435,12 @@ func (r *Repository) ListHotlistItems(ctx context.Context, sourceKey string, top
 	}
 	fetchN := topN * 2
 
-	// 所有热搜源(知乎/百度/微博)的 scraper 都把官方 rank 编码进 published_at:
-	// rank 1 = now,rank 2 = now-1s,…(配合 COALESCE 锁定后永不变)。
-	// 因此:取最新一次抓取批次,按 published_at DESC 排序 = 各平台官方榜单顺序。
-	// 用 heat_value 排不一定对(知乎/百度/微博 rank 都不完全跟 heat_value 一致,
-	// 还含推荐权重 / 互动量等)。
+	// 所有热搜源(知乎/百度/微博)的 scraper 把官方榜位写到 source_rank 字段
+	// (1-based,1 = 榜首)。取最新一次抓取批次,按 source_rank ASC 排序就是
+	// 各平台官方榜单顺序。
+	// 不再用 published_at 编码 rank — 那样跟"问题创建时间/上榜时间"语义打架,
+	// 各 tab 列表想按时间序排会出问题。现在 published_at 回归本意,各 tab 用
+	// published_at DESC 排,首页 HotPanel 用 source_rank ASC 排,各取所需。
 	//
 	// 用 DISTINCT ON (title) 去重:同一标题只保留首选那条。微博源历史上 URL
 	// 含 band_rank 不稳定,DB 里同一热搜词被存成多行(commit 7f73981 已修但
@@ -451,19 +452,20 @@ WITH latest AS (
 )
 SELECT id, source_key, url, title, content, author,
        heat, heat_value, prev_heat, prev_heat_value,
-       published_at, fetched_at
+       COALESCE(source_rank, 0), published_at, fetched_at
 FROM (
     SELECT DISTINCT ON (title)
            id, source_key, url, title, content, author,
            heat, heat_value, prev_heat, prev_heat_value,
-           published_at, fetched_at
+           source_rank, published_at, fetched_at
     FROM articles, latest
     WHERE source_key = $1
       AND heat_value > 0
       AND fetched_at >= latest.cutoff
-    ORDER BY title, published_at DESC
+      AND source_rank IS NOT NULL
+    ORDER BY title, source_rank ASC
 ) AS dedup
-ORDER BY published_at DESC
+ORDER BY source_rank ASC
 LIMIT $2
 `
 	rows, err := r.pool.Query(ctx, q, sourceKey, fetchN)
@@ -477,7 +479,7 @@ LIMIT $2
 		var a model.Article
 		if err := rows.Scan(&a.ID, &a.SourceKey, &a.URL, &a.Title, &a.Content,
 			&a.Author, &a.Heat, &a.HeatValue, &a.PrevHeat, &a.PrevHeatValue,
-			&a.PublishedAt, &a.FetchedAt); err != nil {
+			&a.SourceRank, &a.PublishedAt, &a.FetchedAt); err != nil {
 			return nil, err
 		}
 		all = append(all, a)

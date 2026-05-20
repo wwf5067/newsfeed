@@ -47,8 +47,8 @@ func (r *Repository) UpsertArticle(ctx context.Context, a model.Article) (id int
 	}()
 
 	const upsertQ = `
-INSERT INTO articles (source_key, url, title, content, author, heat, heat_value, published_at, fetched_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
+INSERT INTO articles (source_key, url, title, content, author, heat, heat_value, source_rank, published_at, fetched_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, NULLIF($8, 0), $9, NOW())
 ON CONFLICT (url) DO UPDATE SET
     title           = EXCLUDED.title,
     content         = EXCLUDED.content,
@@ -57,13 +57,14 @@ ON CONFLICT (url) DO UPDATE SET
     prev_heat_value = articles.heat_value,
     heat            = EXCLUDED.heat,
     heat_value      = EXCLUDED.heat_value,
+    source_rank     = EXCLUDED.source_rank,
     published_at    = COALESCE(articles.published_at, EXCLUDED.published_at),
     fetched_at      = NOW()
 RETURNING id, (xmax = 0) AS is_new
 `
 	var isNew bool
 	if err := tx.QueryRow(ctx, upsertQ,
-		a.SourceKey, a.URL, a.Title, a.Content, a.Author, a.Heat, a.HeatValue, a.PublishedAt,
+		a.SourceKey, a.URL, a.Title, a.Content, a.Author, a.Heat, a.HeatValue, a.SourceRank, a.PublishedAt,
 	).Scan(&id, &isNew); err != nil {
 		return 0, false, err
 	}
@@ -105,9 +106,8 @@ type SourceStat struct {
 // TodayStatsBySource 按"今日"(NOW() 当地时区 0 点起)统计每个源的文章数 + 该源最热一条。
 // 用于 daily summary 公告生成。
 //
-// 最热口径:每个源取最新一次抓取批次中 published_at 最大的那条(= 该源官方
-// 榜单 rank 1)。所有 scraper 都把 rank 编码进 published_at(rank 1 = now,
-// rank 2 = now-1s ...),COALESCE 锁定后该时间永久反映源自家排名。
+// 最热口径:每个源取最新一次抓取批次中 source_rank 最小的那条(= 该源官方
+// 榜单 rank 1)。所有 scraper 都把官方榜位写到 source_rank 字段(1-based)。
 // 不直接用 heat_value 是因为各平台官方 rank 不完全跟 heat_value 一致(还含
 // 推荐权重 / 互动量 / 关键词权重),按 heat_value 取的"最热"可能跟用户在源
 // 网站首页看到的 rank 1 不是同一条。
@@ -116,7 +116,7 @@ type SourceStat struct {
 func (r *Repository) TodayStatsBySource(ctx context.Context) ([]SourceStat, error) {
 	const q = `
 WITH today AS (
-    SELECT source_key, title, heat, heat_value, published_at, fetched_at
+    SELECT source_key, title, heat, heat_value, source_rank, published_at, fetched_at
     FROM articles
     WHERE fetched_at >= date_trunc('day', NOW())
 ),
@@ -134,7 +134,8 @@ SELECT
           AND x.fetched_at >= (
               SELECT cutoff FROM latest_per_source WHERE source_key = t.source_key
           )
-        ORDER BY x.published_at DESC
+          AND x.source_rank IS NOT NULL
+        ORDER BY x.source_rank ASC
         LIMIT 1
     ) AS top_title,
     (
@@ -143,7 +144,8 @@ SELECT
           AND x.fetched_at >= (
               SELECT cutoff FROM latest_per_source WHERE source_key = t.source_key
           )
-        ORDER BY x.published_at DESC
+          AND x.source_rank IS NOT NULL
+        ORDER BY x.source_rank ASC
         LIMIT 1
     ) AS top_heat
 FROM today AS t

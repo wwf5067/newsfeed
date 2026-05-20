@@ -144,7 +144,6 @@ func (z *ZhihuHot) Fetch(ctx context.Context) ([]model.Article, error) {
 	}
 
 	articles := make([]model.Article, 0, len(parsed.Data))
-	now := time.Now()
 	for rank, item := range parsed.Data {
 		t := item.Target
 		if t.Title == "" {
@@ -157,16 +156,14 @@ func (z *ZhihuHot) Fetch(ctx context.Context) ([]model.Article, error) {
 			webURL = "https://www.zhihu.com/question/" + id
 		}
 
-		// PublishedAt 按 API 返回顺序(= 知乎官方榜位)偏移 1 秒/位:
-		//   rank 0(榜首) → now
-		//   rank 1       → now - 1s
-		//   ...
-		// 配合 crawler/repository.go 的 COALESCE 锁定,首次入库后永不变。
-		// 旧版用 t.Created(问题创建时间)是错的:知乎热榜的 rank 1 不一定是
-		// 最新创建的问题,常常是几小时前的老问题被推上热榜,导致前端按
-		// published_at DESC 排序时跟知乎官方榜位完全脱节。
-		// 注意:不再用 t.Created 也意味着用户在前端看到的"发布时间"会变成
-		// "首次上榜被我们抓到的时间",对热榜场景这其实更直观(知道这条何时上榜)。
+		// PublishedAt = 问题创建时间(t.Created)。知乎 tab 按 published_at DESC
+		// 排时,展示"最近创建的问题在前",符合知乎信息流直觉。
+		// SourceRank 单独存,首页 HotPanel 用它按官方榜位排序。
+		published := time.Now()
+		if t.Created > 0 {
+			published = time.Unix(t.Created, 0)
+		}
+
 		articles = append(articles, model.Article{
 			URL:         webURL,
 			Title:       t.Title,
@@ -174,7 +171,8 @@ func (z *ZhihuHot) Fetch(ctx context.Context) ([]model.Article, error) {
 			Author:      t.AuthorName,
 			Heat:        item.DetailText,
 			HeatValue:   crawler.ParseHeat(item.DetailText),
-			PublishedAt: now.Add(-time.Duration(rank) * time.Second),
+			SourceRank:  rank + 1, // 1-based,API 数组顺序 = 知乎官方榜位
+			PublishedAt: published,
 		})
 	}
 
