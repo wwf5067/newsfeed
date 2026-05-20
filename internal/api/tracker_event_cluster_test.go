@@ -109,3 +109,65 @@ func TestEventClustering(t *testing.T) {
 		}
 	}
 }
+
+func TestEventClustering_SourceDuplicateCollapse(t *testing.T) {
+	articles := []model.Article{
+		// 同一来源百度,标题近重复:应折叠为 1 条计数+展示
+		{ID: 101, Title: "泰国内阁决定取消60天免签政策", SourceKey: "baidu_hot", HeatValue: 7420000},
+		{ID: 102, Title: "泰国内阁决定取消 60 天免签政策", SourceKey: "baidu_hot", HeatValue: 7000000},
+		// 其他来源同事件
+		{ID: 103, Title: "泰国终止60天免签", SourceKey: "weibo_hot", HeatValue: 930000},
+		{ID: 104, Title: "泰国取消免签后旅游业影响几何", SourceKey: "zhihu_hot", HeatValue: 450000},
+	}
+
+	heatDiscovered := collectHeatDiscoveredWords(articles)
+	events := clusterTrackerEvents(articles, heatDiscovered, nil, 10)
+	if len(events) == 0 {
+		t.Fatalf("期望至少 1 个事件组,实际 0")
+	}
+
+	var thai *trackerEventGroup
+	for i := range events {
+		e := &events[i]
+		for _, ent := range e.Entities {
+			if ent == "泰国" {
+				thai = e
+				break
+			}
+		}
+		if thai != nil {
+			break
+		}
+	}
+	if thai == nil {
+		t.Fatalf("未找到泰国免签事件组")
+	}
+
+	// 同源重复折叠后,该事件 count 应为 3(百度 1 + 微博 1 + 知乎 1)
+	if thai.Count != 3 {
+		t.Fatalf("期望折叠后 count=3,实际 %d", thai.Count)
+	}
+
+	// 只展示一条百度文章
+	baiduShown := 0
+	for _, a := range thai.Articles {
+		if a.SourceKey == "baidu_hot" {
+			baiduShown++
+		}
+	}
+	if baiduShown != 1 {
+		t.Fatalf("期望仅展示 1 条 baidu_hot,实际 %d", baiduShown)
+	}
+
+	// 来源统计里百度也只算 1
+	baiduCount := 0
+	for _, s := range thai.Sources {
+		if s.SourceKey == "baidu_hot" {
+			baiduCount = s.Count
+			break
+		}
+	}
+	if baiduCount != 1 {
+		t.Fatalf("期望来源统计 baidu_hot=1,实际 %d", baiduCount)
+	}
+}

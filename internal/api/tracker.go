@@ -285,6 +285,8 @@ var (
 		// 补充:社会/教育/气候/金融话题关键词尾缀
 		"欺凌", "打假", "通胀", "高温", "降温",
 		"信用卡", "涨价", "降价", "暴跌", "暴涨",
+		// 事件公告/政策调整类高频尾缀
+		"免签", "名单", "阵容", "排名",
 		"校园暴力", "虚假宣传", "偷税漏税",
 		// 医疗/民生:单独出现时是高价值话题词,不能被 weak 过滤
 		"医保",
@@ -1879,10 +1881,9 @@ func shouldUseKeywordAsClusterConnector(keyword string) bool {
 	if _, ok := visitSuffixToEntity[keyword]; ok {
 		return true
 	}
-	// 2-4 字中文关键词兜底:仅在非句式/非数据描述/非泛词前提下放行。
-	// 这类词在抽取阶段已过一轮过滤,再叠加"必须有实体+关键词共现"才会连边,
-	// 风险可控且能显著提升关键词连接召回。
-	if hanRuneCount(keyword) >= 2 && hanRuneCount(keyword) <= 4 {
+	// 统一语义规则兜底:仅保留具备明确事件后缀的话题词。
+	// 不再使用纯长度兜底,避免把任意短词放进连接器造成误连。
+	if looksLikeTopicPhrase(keyword) {
 		return true
 	}
 	return false
