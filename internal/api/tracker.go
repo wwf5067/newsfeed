@@ -108,7 +108,13 @@ var (
 	// 这些在知乎标题中常用于引用普通短语(如"肉夹馍""受害者思维"),不是作品名。
 	// 进入 pool 但不 force entity,走正常的 shouldKeepTrackerToken 过滤。
 	quotedPhraseRegex = regexp.MustCompile(`[「『]([^」』]{1,20})[」』]`)
-	stopTokens        = map[string]struct{}{
+	// honorificRegex 提取"X+院士/教授/总裁/董事长/市长/省长/部长"形式的人名+头衔。
+	// gse 切词常把"方岱宁院士"切成 ["方岱宁", "院士"] 两段,前者 3 字汉字不命中
+	// 任何 entity 启发式,后者单字头衔被弱过滤丢。这里在切词前用正则把整段
+	// 拽出来作为 entity 强候选,让用户能看到"X院士"这种事件主体。
+	// 限制人名 2-4 字汉字以减少误命中(如"成功院士"中的"成功"不是人名)。
+	honorificRegex = regexp.MustCompile(`[\p{Han}]{2,4}(院士|教授|总裁|董事长|市长|省长|部长)`)
+	stopTokens     = map[string]struct{}{
 		"这个": {}, "那个": {}, "一个": {}, "一次": {}, "一些": {}, "一种": {},
 		"我们": {}, "你们": {}, "他们": {}, "大家": {}, "自己": {}, "别人": {},
 		"什么": {}, "哪些": {}, "怎么": {}, "如何": {}, "为什么": {}, "为何": {}, "为啥": {},
@@ -165,6 +171,9 @@ var (
 		"联盟", "协会", "机构", "中心", "工厂", "品牌", "航空", "铁路", "地铁",
 		// 行业展会/活动:让"珠海航展""上海车展""科博会""服贸会"自动当 entity
 		"航展", "车展", "展会", "博览会", "交易会",
+		// 人物头衔(让"方岱宁院士""王教授"等带头衔人名当 entity 输出,
+		// 比让 NER 模型识别人名简单 — 头衔本身就承担了"这是人名"的识别意义)
+		"院士", "教授", "总裁", "董事长", "市长", "省长", "部长",
 	}
 	entityPrefixes = []string{
 		"中国", "美国", "日本", "韩国", "俄罗斯", "北京", "上海", "深圳", "广州",
@@ -578,6 +587,17 @@ func extractTrackerCandidates(article model.Article) []trackerCandidate {
 			}
 			appendTrackerPool(&ordered, poolSeen, normalized)
 		}
+	}
+
+	// -0.3. 头衔人名预提取:"X+院士/教授/总裁/董事长/市长/省长/部长"整段当 entity。
+	//       gse 切词常把"方岱宁院士"切成两段都识别不出,这里整段拽出来强制 entity。
+	for _, m := range honorificRegex.FindAllString(title, -1) {
+		normalized := canonicalizeTrackerToken(m)
+		if normalized == "" {
+			continue
+		}
+		forcedEntities[normalized] = struct{}{}
+		appendTrackerPool(&ordered, poolSeen, normalized)
 	}
 
 	// 0. 合称拆解:检测标题中的2字合称(美以/中美/俄乌等),展开为两个独立实体。

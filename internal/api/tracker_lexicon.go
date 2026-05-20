@@ -16,6 +16,7 @@ import (
 // 增删条目时:只动这个变量即可,所有 alias 索引会在包初始化时自动重建。
 var trackerEntityLexicon = []trackerLexiconEntry{
 	// === AI / 大模型公司 ===
+	{Label: "AI", Category: "event", Aliases: []string{"AI", "人工智能", "Artificial Intelligence"}},
 	{Label: "OpenAI", Category: "company", Aliases: []string{"OpenAI", "openai"}},
 	{Label: "ChatGPT", Category: "company", Aliases: []string{"ChatGPT", "chatgpt", "GPT-4", "GPT4", "GPT-4o", "GPT4o", "GPT-5", "GPT5", "o1", "o3"}},
 	{Label: "DeepSeek", Category: "company", Aliases: []string{"DeepSeek", "deepseek", "深度求索"}},
@@ -55,6 +56,10 @@ var trackerEntityLexicon = []trackerLexiconEntry{
 	{Label: "OPPO", Category: "company", Aliases: []string{"OPPO", "oppo"}},
 	{Label: "vivo", Category: "company", Aliases: []string{"vivo", "VIVO"}},
 	{Label: "荣耀", Category: "company", Aliases: []string{"荣耀", "Honor", "honor"}},
+	{Label: "联想", Category: "company", Aliases: []string{"联想", "Lenovo", "lenovo", "ThinkPad", "thinkpad"}},
+	{Label: "拯救者", Category: "company", Aliases: []string{"拯救者", "Legion", "legion"}}, // 联想旗下游戏品牌
+	{Label: "戴尔", Category: "company", Aliases: []string{"戴尔", "Dell", "dell"}},
+	{Label: "惠普", Category: "company", Aliases: []string{"惠普", "HP", "hp"}},
 
 	// === 消费品牌(B 站/小红书/抖音高频)===
 	// 选词原则:用户群高频提到 + 不会跟通用词冲突。
@@ -172,6 +177,12 @@ var trackerEntityLexicon = []trackerLexiconEntry{
 	{Label: "樊振东", Category: "person", Aliases: []string{"樊振东"}},
 	{Label: "王楚钦", Category: "person", Aliases: []string{"王楚钦"}},
 	{Label: "陈梦", Category: "person", Aliases: []string{"陈梦"}},
+	// 围棋
+	{Label: "柯洁", Category: "person", Aliases: []string{"柯洁"}},
+	{Label: "古力", Category: "person", Aliases: []string{"古力"}},
+	{Label: "聂卫平", Category: "person", Aliases: []string{"聂卫平"}},
+	{Label: "井山裕太", Category: "person", Aliases: []string{"井山裕太"}},
+	{Label: "申真谞", Category: "person", Aliases: []string{"申真谞"}},
 	{Label: "全红婵", Category: "person", Aliases: []string{"全红婵"}},
 	{Label: "梅西", Category: "person", Aliases: []string{"梅西", "Messi", "messi"}},
 	{Label: "C罗", Category: "person", Aliases: []string{"C罗", "Ronaldo", "ronaldo", "克里斯蒂亚诺·罗纳尔多"}},
@@ -264,6 +275,12 @@ var trackerEntityLexicon = []trackerLexiconEntry{
 	{Label: "意甲", Category: "event", Aliases: []string{"意甲"}},
 	{Label: "德甲", Category: "event", Aliases: []string{"德甲"}},
 	{Label: "法甲", Category: "event", Aliases: []string{"法甲"}},
+	// 围棋赛事
+	{Label: "围棋", Category: "event", Aliases: []string{"围棋"}},
+	{Label: "围甲", Category: "event", Aliases: []string{"围甲", "围甲联赛", "中国围棋甲级联赛"}},
+	{Label: "LG杯", Category: "event", Aliases: []string{"LG杯"}},
+	{Label: "三星杯", Category: "event", Aliases: []string{"三星杯"}},
+	{Label: "应氏杯", Category: "event", Aliases: []string{"应氏杯"}},
 
 	// === 中国国家队(简称在体育新闻高频)===
 	{Label: "国足", Category: "team", Aliases: []string{"国足", "中国男足", "中国国家队"}},
