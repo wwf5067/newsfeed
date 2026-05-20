@@ -110,6 +110,7 @@ const SOURCE_LABELS: Record<string, string> = {
   bilibili_popular: "B站",
   baidu_hot: "百度",
   weibo_hot: "微博",
+  sogou_hot: "搜狗",
 };
 
 const HEAT_ICONS: Record<string, { icon: string; label: string }> = {
@@ -117,6 +118,7 @@ const HEAT_ICONS: Record<string, { icon: string; label: string }> = {
   bilibili_popular: { icon: "▶", label: "播放量" },
   baidu_hot: { icon: "🔍", label: "热搜" },
   weibo_hot: { icon: "📢", label: "热搜" },
+  sogou_hot: { icon: "🔎", label: "热搜" },
 };
 
 const SOURCE_FILTERS: { key: string; label: string }[] = [
@@ -125,6 +127,7 @@ const SOURCE_FILTERS: { key: string; label: string }[] = [
   // { key: "bilibili_popular", label: "B站" }, // 暂时屏蔽:内容以娱乐视频为主,与新闻聚合相关度低
   { key: "baidu_hot", label: "百度" },
   { key: "weibo_hot", label: "微博" },
+  { key: "sogou_hot", label: "搜狗" },
 ];
 
 // ======================== API ========================
@@ -321,8 +324,10 @@ function TopicGroup({
   const [expanded, setExpanded] = useState(false);
   const displayArticles = expanded ? articles : articles.slice(0, 3);
   const hasMore = articles.length > 3;
-  const shownCount = articles.length;
-  const totalCount = topic.count;
+  // 用两者最大值作为展示总数：后端计数更全，但本地匹配可能因多重归属而更多
+  const displayCount = Math.max(topic.count, articles.length);
+  // 后端还有本地没拿到的文章（前端限拉300条）
+  const hasMoreOnServer = topic.count > articles.length;
 
   const momentumCfg: Record<string, { text: string; icon: string; cls: string }> = {
     up: { text: "升温", icon: "↗", cls: "text-emerald-600 dark:text-emerald-400" },
@@ -394,10 +399,10 @@ function TopicGroup({
         ))}
       </div>
 
-      {/* 底部: 文章数 + 展开 + 来源 chips (与事件卡片底部保持一致) */}
+      {/* 底部: 文章数 + 展开 + 查看全部 + 来源 chips */}
       <div className="flex flex-wrap items-center gap-1.5 border-t border-zinc-50 px-3 py-1.5 dark:border-zinc-800/50">
         <span className="text-[11px] text-zinc-400">
-          {totalCount > shownCount ? `${totalCount} 篇（展示 ${shownCount}）` : `${totalCount} 篇`}
+          {displayCount > articles.length ? `${displayCount} 篇（展示 ${articles.length}）` : `${displayCount} 篇`}
         </span>
         {hasMore && (
           <button
@@ -407,6 +412,14 @@ function TopicGroup({
           >
             {expanded ? "收起" : `+${articles.length - 3} 更多`}
           </button>
+        )}
+        {hasMoreOnServer && (
+          <Link
+            href={`/tracker?term=${encodeURIComponent(topic.label)}&window=${windowHours}`}
+            className="text-[11px] text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200"
+          >
+            查看全部 →
+          </Link>
         )}
         {topic.sources?.map((s) => (
           <span

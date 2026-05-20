@@ -326,6 +326,7 @@ var sourceLabels = map[string]string{
 	"bilibili_popular": "B 站",
 	"baidu_hot":        "百度",
 	"weibo_hot":        "微博",
+	"sogou_hot":        "搜狗",
 }
 
 // sourceMetricNoun 不同源的"最热"指标名(避免拿"播放量"和"热度"做心理换算)。
@@ -334,6 +335,7 @@ var sourceMetricNoun = map[string]string{
 	"bilibili_popular": "最高",
 	"baidu_hot":        "热搜",
 	"weibo_hot":        "最热",
+	"sogou_hot":        "热搜",
 }
 
 // sourceIcons 不同源在公告栏中的前缀图标,让每行一眼可辨来源。
@@ -342,6 +344,7 @@ var sourceIcons = map[string]string{
 	"bilibili_popular": "▶️",
 	"baidu_hot":        "🔍",
 	"weibo_hot":        "📢",
+	"sogou_hot":        "🔎",
 }
 
 // summaryExcludedSources 列出不在公告摘要里展示的数据源。
@@ -573,7 +576,7 @@ func (r *Runner) recordSuccess(key string) {
 
 // isHotSearchSource 判断是否为"热搜榜单"类源 — 标题短且易变体,需要模糊去重。
 func isHotSearchSource(key string) bool {
-	return key == "baidu_hot" || key == "weibo_hot"
+	return key == "baidu_hot" || key == "weibo_hot" || key == "sogou_hot"
 }
 
 // deduplicateAgainstRecent 跨批次模糊去重:
