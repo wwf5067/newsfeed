@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -220,6 +221,11 @@ func (h *Handler) ListTrackers(w http.ResponseWriter, r *http.Request) {
 	// 事件聚类:把共享实体的文章合并为事件组,提升首页信息密度。
 	heatDiscovered := collectHeatDiscoveredWords(articles)
 	resp.Events = clusterTrackerEvents(articles, heatDiscovered, 8)
+
+	// 热度候选词持久化(异步,不阻塞响应):将发现的热词写入 DB,检查转正。
+	if len(heatDiscovered) > 0 {
+		go h.persistHeatCandidates(heatDiscovered, articles)
+	}
 
 	// 写入缓存(写锁)。并发场景下可能有多个请求同时穿透到这里,
 	// 最后写入者覆盖前者,结果一致,可接受。
@@ -484,6 +490,58 @@ func (h *Handler) GetHotlist(w http.ResponseWriter, r *http.Request) {
 		"baidu": baidu,
 		"weibo": weibo,
 	})
+}
+
+// persistHeatCandidates 异步持久化热度发现词到 DB,并检查是否有新词达到转正阈值。
+// 在独立 goroutine 中执行,不阻塞 HTTP 响应。
+func (h *Handler) persistHeatCandidates(discovered map[string]struct{}, articles []model.Article) {
+	const (
+		promoteMinDays = 3  // 连续 3 天出现
+		promoteMinHits = 10 // 累计至少 10 篇文章命中
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// 统计每个发现词在当前文章集合中的命中次数
+	for word := range discovered {
+		hitCount := 0
+		for _, a := range articles {
+			tokens := segmentTitle(a.Title)
+			for _, tok := range tokens {
+				cleaned := normalizeLexiconAlias(tok)
+				cleaned = canonicalizeTrackerToken(cleaned)
+				if cleaned == word {
+					hitCount++
+					break
+				}
+			}
+		}
+
+		// 推断词性
+		kind := inferWordKind(word)
+
+		// 写入/更新 DB
+		if err := h.repo.UpsertHeatCandidate(ctx, word, kind, hitCount); err != nil {
+			h.logger.Warn("upsert heat candidate failed", "word", word, "err", err)
+		}
+	}
+
+	// 检查并执行转正
+	promoted, err := h.repo.PromoteCandidates(ctx, promoteMinDays, promoteMinHits)
+	if err != nil {
+		h.logger.Warn("promote heat candidates failed", "err", err)
+		return
+	}
+	if len(promoted) > 0 {
+		// 注入运行时词典
+		InjectPromotedWords(promoted)
+		for _, c := range promoted {
+			h.logger.Info("heat candidate promoted",
+				"word", c.Word, "kind", c.Kind,
+				"hit_days", c.HitDays, "total_hits", c.TotalHits)
+		}
+	}
 }
 
 func parseIntDefault(s string, def int) int {

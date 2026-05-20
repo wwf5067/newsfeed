@@ -37,6 +37,13 @@ func main() {
 	subRepo := subscribe.NewRepository(pool)
 	handler := api.NewHandler(log, repo).WithSubscribe(subRepo, cfg.DigestTo)
 
+	// 启动时加载已转正的热度候选词,注入 gse 分词器 + trackerEntityLabelSet。
+	// 失败不阻塞启动(降级为不注入,转正词下次请求时会重新检测)。
+	if promoted, err := repo.ListPromotedCandidates(ctx); err == nil && len(promoted) > 0 {
+		api.InjectPromotedWords(promoted)
+		log.Info("loaded promoted heat candidates", "count", len(promoted))
+	}
+
 	srv := &http.Server{
 		Addr:         cfg.APIAddr,
 		Handler:      api.NewRouter(handler),

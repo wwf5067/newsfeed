@@ -2,6 +2,7 @@ package api
 
 import (
 	"log/slog"
+	"strings"
 	"sync"
 
 	"github.com/go-ego/gse"
@@ -46,4 +47,70 @@ func segmentTitle(title string) []string {
 		return nil
 	}
 	return trackerSeg.Cut(title, true)
+}
+
+// posSegmentTitle 带词性的分词。返回 (词, 词性) 对。
+// 词性标记遵循 gse/jieba 标准: n=名词, v=动词, nr=人名, ns=地名, nt=机构名 等。
+func posSegmentTitle(title string) []gse.SegPos {
+	trackerSegOnce.Do(loadTrackerSegmenter)
+	if trackerSegErr != nil {
+		return nil
+	}
+	return trackerSeg.Pos(title, true)
+}
+
+// inferWordKind 根据 gse 词性标注推断热词应归类为 entity 还是 keyword。
+// 规则:
+//   - n/nr/ns/nt/nz/eng/nrt → "entity"(名词性→实体)
+//   - v/vn/vd/vg → "keyword"(动词性→事件关键词)
+//   - 其他/未知 → "keyword"(默认保守)
+func inferWordKind(word string) string {
+	segments := posSegmentTitle(word)
+	if len(segments) == 0 {
+		return "keyword"
+	}
+	// 取第一个片段的词性(短词通常只有一个片段)
+	pos := ""
+	for _, seg := range segments {
+		text := seg.Text
+		if strings.TrimSpace(text) == strings.TrimSpace(word) {
+			pos = seg.Pos
+			break
+		}
+	}
+	if pos == "" && len(segments) > 0 {
+		pos = segments[0].Pos
+	}
+
+	switch {
+	case strings.HasPrefix(pos, "n"): // n, nr, ns, nt, nz, nrt...
+		return "entity"
+	case pos == "eng": // 英文
+		return "entity"
+	default:
+		return "keyword"
+	}
+}
+
+// InjectPromotedWords 运行时注入转正的候选词到 gse 和 trackerEntityLabelSet。
+// 调用时机: 服务启动时 + 每次有新转正时。
+// 线程安全: gse.AddToken 本身是线程安全的,CalcToken 需要在注入完成后调一次。
+func InjectPromotedWords(candidates []HeatCandidate) {
+	trackerSegOnce.Do(loadTrackerSegmenter)
+	if trackerSegErr != nil {
+		return
+	}
+	for _, c := range candidates {
+		// 注入 gse 词典让分词器整体切出
+		_ = trackerSeg.AddToken(c.Word, 100, "n")
+		// entity 类型额外注入 labelSet,让 shouldKeepTrackerToken 优先保留
+		if c.Kind == "entity" {
+			trackerEntityLabelSet[c.Word] = struct{}{}
+		}
+	}
+	if len(candidates) > 0 {
+		trackerSeg.CalcToken()
+		slog.Info("injected promoted heat candidates into gse",
+			"count", len(candidates))
+	}
 }

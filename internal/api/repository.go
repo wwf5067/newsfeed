@@ -596,3 +596,89 @@ WHERE a.id = ANY($2::bigint[])
 	}
 	return out, rows.Err()
 }
+
+// === Heat Candidate (热度反馈候选词典) ===
+
+// HeatCandidate 候选词表行。
+type HeatCandidate struct {
+	ID         int64
+	Word       string
+	Kind       string // "entity" or "keyword"
+	HitDays    int
+	TotalHits  int
+	PromotedAt *time.Time
+}
+
+// UpsertHeatCandidate 插入或更新候选词。
+// 如果已存在:
+//   - last_hit_at 在 36h 内 → hit_days++, total_hits += hitCount
+//   - last_hit_at 超过 36h → hit_days 重置为 1(中断了)
+func (r *Repository) UpsertHeatCandidate(ctx context.Context, word, kind string, hitCount int) error {
+	_, err := r.pool.Exec(ctx, `
+		INSERT INTO heat_candidates (word, kind, total_hits, hit_days, last_hit_at)
+		VALUES ($1, $2, $3, 1, NOW())
+		ON CONFLICT (word) DO UPDATE SET
+			kind = EXCLUDED.kind,
+			total_hits = heat_candidates.total_hits + EXCLUDED.total_hits,
+			hit_days = CASE
+				WHEN heat_candidates.last_hit_at > NOW() - INTERVAL '36 hours'
+				THEN heat_candidates.hit_days + 1
+				ELSE 1
+			END,
+			last_hit_at = NOW()
+		WHERE heat_candidates.promoted_at IS NULL
+	`, word, kind, hitCount)
+	return err
+}
+
+// ListPromotedCandidates 返回所有已转正的候选词(启动时加载注入 gse)。
+func (r *Repository) ListPromotedCandidates(ctx context.Context) ([]HeatCandidate, error) {
+	rows, err := r.pool.Query(ctx, `
+		SELECT id, word, kind, hit_days, total_hits, promoted_at
+		FROM heat_candidates
+		WHERE promoted_at IS NOT NULL
+		ORDER BY promoted_at DESC
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []HeatCandidate
+	for rows.Next() {
+		var c HeatCandidate
+		if err := rows.Scan(&c.ID, &c.Word, &c.Kind, &c.HitDays, &c.TotalHits, &c.PromotedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
+// PromoteCandidates 将满足阈值的候选词批量转正。
+// 条件: hit_days >= minDays AND total_hits >= minHits AND promoted_at IS NULL
+// 返回转正的词列表。
+func (r *Repository) PromoteCandidates(ctx context.Context, minDays, minHits int) ([]HeatCandidate, error) {
+	rows, err := r.pool.Query(ctx, `
+		UPDATE heat_candidates
+		SET promoted_at = NOW()
+		WHERE promoted_at IS NULL
+		  AND hit_days >= $1
+		  AND total_hits >= $2
+		RETURNING id, word, kind, hit_days, total_hits, promoted_at
+	`, minDays, minHits)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []HeatCandidate
+	for rows.Next() {
+		var c HeatCandidate
+		if err := rows.Scan(&c.ID, &c.Word, &c.Kind, &c.HitDays, &c.TotalHits, &c.PromotedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
