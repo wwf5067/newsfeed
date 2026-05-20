@@ -42,7 +42,7 @@ var trackerEntityLexicon = []trackerLexiconEntry{
 	{Label: "三只羊", Category: "company", Aliases: []string{"三只羊", "三只羊网络"}},
 
 	// === 硬件 / 科技公司 ===
-	{Label: "小米", Category: "company", Aliases: []string{"小米", "Xiaomi", "xiaomi", "小米SU7", "SU7", "小米YU7"}},
+	{Label: "小米", Category: "company", Aliases: []string{"小米", "Xiaomi", "xiaomi", "小米SU7", "SU7", "小米YU7", "YU7", "小米澎湃"}},
 	{Label: "华为", Category: "company", Aliases: []string{"华为", "Huawei", "huawei", "鸿蒙", "HarmonyOS", "harmonyos", "Mate", "Pura", "海思", "麒麟"}},
 	{Label: "苹果", Category: "company", Aliases: []string{"苹果", "Apple", "apple", "iPhone", "iOS", "MacBook", "macOS", "macos", "iPad", "Vision Pro"}},
 	{Label: "微软", Category: "company", Aliases: []string{"微软", "Microsoft", "microsoft", "Copilot", "copilot", "Azure", "azure", "Windows", "Xbox"}},
@@ -281,6 +281,12 @@ var trackerEntityLexicon = []trackerLexiconEntry{
 	{Label: "LG杯", Category: "event", Aliases: []string{"LG杯"}},
 	{Label: "三星杯", Category: "event", Aliases: []string{"三星杯"}},
 	{Label: "应氏杯", Category: "event", Aliases: []string{"应氏杯"}},
+	// 赛车 / 赛道
+	{Label: "F1", Category: "event", Aliases: []string{"F1", "f1", "一级方程式"}},
+	{Label: "WSBK", Category: "event", Aliases: []string{"WSBK", "世界超级摩托车锦标赛"}},
+	{Label: "MotoGP", Category: "event", Aliases: []string{"MotoGP", "motogp"}},
+	{Label: "纽博格林", Category: "place", Aliases: []string{"纽博格林", "纽北", "Nurburgring", "Nordschleife"}},
+	{Label: "勒芒", Category: "event", Aliases: []string{"勒芒", "勒芒24小时", "Le Mans"}},
 
 	// === 中国国家队(简称在体育新闻高频)===
 	{Label: "国足", Category: "team", Aliases: []string{"国足", "中国男足", "中国国家队"}},
