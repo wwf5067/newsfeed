@@ -2075,6 +2075,23 @@ func maxInt64(a, b int64) int64 {
 	return b
 }
 
+// deduplicateTrackerTopics 去除子串关系的 topic 冗余。
+//
+// 规则:长 label 包含短 label 时,**丢长的留短的**(短的信息密度高、热度信号集中)。
+//
+// 历史:旧规则是反过来的(长的吃短的,但要 short.Score <= long.Score*2),
+// 这跟 candidates 阶段的 deduplicateCandidateSubstrings Pass 0(长 entity > 8 字
+// 被短 entity 吸收)的设计**互相矛盾**:
+//
+//	· candidates 阶段:`俄罗斯总统普京发表视频讲话` 被 `普京` `俄罗斯` 吸收(短赢)
+//	· 旧 topics 阶段:同一组数据,`普京` 又被某个长 label 吸收(长赢)
+//
+// 两个 pass 反向后,实际效果是"短"两次都不能稳定保留,prod 实测 `普京` 出现
+// 在 storyline 接口但完全不出现在首页 topics(被该函数吸收)。
+//
+// 改回"短赢"统一两阶段:任何长 label 完全包含短 label 时,长 label 被吸收。
+// 不再做 score 加权门槛 — 短 label 既然包含在长 label 里,语义上是同一事件,
+// 谁的 score 都不影响"哪个更代表事件主体"的判断,主体永远是短词。
 func deduplicateTrackerTopics(items []trackerTopic) []trackerTopic {
 	if len(items) <= 1 {
 		return items
@@ -2094,16 +2111,17 @@ func deduplicateTrackerTopics(items []trackerTopic) []trackerTopic {
 			if len(li) == len(lj) {
 				continue
 			}
+			// 找出短和长
 			short, long := i, j
 			if len(li) > len(lj) {
 				short, long = j, i
 			}
+			// 长 label 必须真的包含短 label 才有"子串"关系
 			if !strings.Contains(items[long].Label, items[short].Label) {
 				continue
 			}
-			if items[short].Score <= items[long].Score*2 {
-				absorbed[short] = true
-			}
+			// 长被吸收(跟 candidates Pass 0 一致)
+			absorbed[long] = true
 		}
 	}
 
