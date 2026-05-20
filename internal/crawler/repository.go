@@ -95,6 +95,37 @@ func (r *Repository) PurgeOldArticles(ctx context.Context, days int) (int64, err
 	return tag.RowsAffected(), nil
 }
 
+// ExistingTitle 用于跨批次去重:持有已入库文章的 URL 和标题。
+type ExistingTitle struct {
+	URL   string
+	Title string
+}
+
+// RecentTitlesBySource 查询某源最近 24h 内的所有文章标题+URL。
+// 用于热搜类源(百度/微博)的跨批次模糊去重:如果新抓到的标题跟已有标题相似,
+// 复用已有 URL 以触发 ON CONFLICT UPDATE(而非插入新行)。
+func (r *Repository) RecentTitlesBySource(ctx context.Context, sourceKey string) ([]ExistingTitle, error) {
+	const q = `
+SELECT url, title FROM articles
+WHERE source_key = $1 AND fetched_at >= NOW() - INTERVAL '24 hours'
+`
+	rows, err := r.pool.Query(ctx, q, sourceKey)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []ExistingTitle
+	for rows.Next() {
+		var e ExistingTitle
+		if err := rows.Scan(&e.URL, &e.Title); err != nil {
+			return nil, err
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
 // SourceStat 单个 source 的当日统计:总数 + 最热条目。
 type SourceStat struct {
 	SourceKey string

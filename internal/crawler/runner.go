@@ -13,6 +13,7 @@ import (
 	"github.com/robfig/cron/v3"
 
 	"github.com/wwf5067/newsfeed/internal/crawler/digest"
+	"github.com/wwf5067/newsfeed/internal/model"
 	"github.com/wwf5067/newsfeed/internal/subscribe"
 )
 
@@ -208,6 +209,15 @@ func (r *Runner) runOnce(s Source) {
 		r.applyBackoff(s.Key(), err)
 		log.Error("fetch failed", "err", err)
 		return
+	}
+
+	// 热搜类源(百度/微博):跨批次模糊去重。
+	// 问题:同一个热词百度/微博可能两次返回略有差异(多空格/变一个字),
+	// 导致生成不同 URL → DB 里存了两条几乎相同的记录。
+	// 修复:查出该源最近 24h 已存的标题,如果新标题跟某条旧标题相似,
+	// 则复用旧 URL → 触发 ON CONFLICT UPDATE,不会新增行。
+	if isHotSearchSource(s.Key()) {
+		articles = r.deduplicateAgainstRecent(ctx, s.Key(), articles, log)
 	}
 
 	var inserted, updated int
@@ -559,4 +569,135 @@ func (r *Runner) recordSuccess(key string) {
 	h.LastError = ""
 	h.LastSuccess = time.Now()
 	h.BackoffUntil = time.Time{} // 成功后清除退避
+}
+
+// isHotSearchSource 判断是否为"热搜榜单"类源 — 标题短且易变体,需要模糊去重。
+func isHotSearchSource(key string) bool {
+	return key == "baidu_hot" || key == "weibo_hot"
+}
+
+// deduplicateAgainstRecent 跨批次模糊去重:
+// 查出该源最近 24h 已入库的标题,如果本批某条新标题跟某条旧标题相似,
+// 则复用旧条目的 URL → ON CONFLICT UPDATE,避免重复插入。
+//
+// 相似判断:去空白+小写后,编辑距离≤1 或互为子串。
+func (r *Runner) deduplicateAgainstRecent(
+	ctx context.Context,
+	sourceKey string,
+	articles []model.Article,
+	log *slog.Logger,
+) []model.Article {
+	existing, err := r.repo.RecentTitlesBySource(ctx, sourceKey)
+	if err != nil {
+		log.Warn("dedup: failed to load recent titles, skipping", "err", err)
+		return articles
+	}
+	if len(existing) == 0 {
+		return articles
+	}
+
+	// 预构建已有标题的标准化列表
+	type normEntry struct {
+		norm string
+		url  string
+	}
+	norms := make([]normEntry, 0, len(existing))
+	for _, e := range existing {
+		n := normalizeForDedup(e.Title)
+		if n != "" {
+			norms = append(norms, normEntry{norm: n, url: e.URL})
+		}
+	}
+
+	deduped := 0
+	for i := range articles {
+		norm := normalizeForDedup(articles[i].Title)
+		if norm == "" {
+			continue
+		}
+		for _, ne := range norms {
+			if ne.norm == norm {
+				// 完全匹配:正常,URL 可能已经一样
+				continue
+			}
+			if similarForDedup(norm, ne.norm) {
+				// 相似:复用旧 URL → 触发 ON CONFLICT UPDATE
+				articles[i].URL = ne.url
+				deduped++
+				break
+			}
+		}
+	}
+
+	if deduped > 0 {
+		log.Info("dedup: merged similar titles with existing entries",
+			"source", sourceKey, "merged", deduped)
+	}
+	return articles
+}
+
+// normalizeForDedup 标准化标题用于跨批次去重:去空白,转小写。
+func normalizeForDedup(title string) string {
+	var b strings.Builder
+	b.Grow(len(title))
+	for _, r := range title {
+		if r == ' ' || r == '\t' || r == '\n' || r == '\r' ||
+			r == ' ' || r == '　' { // 半角/全角空格
+			continue
+		}
+		// 简单小写(只处理 ASCII 范围,中文不受影响)
+		if r >= 'A' && r <= 'Z' {
+			r = r + 32
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+
+// similarForDedup 判断两个标准化后的标题是否相似(编辑距离≤1 或互为子串)。
+func similarForDedup(a, b string) bool {
+	if a == b {
+		return true
+	}
+	if strings.Contains(a, b) || strings.Contains(b, a) {
+		return true
+	}
+	// 编辑距离 ≤ 1
+	ra := []rune(a)
+	rb := []rune(b)
+	la, lb := len(ra), len(rb)
+	diff := la - lb
+	if diff < -1 || diff > 1 {
+		return false
+	}
+	if la == lb {
+		d := 0
+		for i := 0; i < la; i++ {
+			if ra[i] != rb[i] {
+				d++
+				if d > 1 {
+					return false
+				}
+			}
+		}
+		return d == 1
+	}
+	// 长度差 1
+	if la < lb {
+		ra, rb = rb, ra
+		la, lb = lb, la
+	}
+	d := 0
+	j := 0
+	for i := 0; i < la && j < lb; i++ {
+		if ra[i] != rb[j] {
+			d++
+			if d > 1 {
+				return false
+			}
+			continue
+		}
+		j++
+	}
+	return true
 }

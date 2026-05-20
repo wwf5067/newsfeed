@@ -10,7 +10,9 @@ import (
 	"net/url"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
+	"unicode"
 
 	"github.com/wwf5067/newsfeed/internal/crawler"
 	"github.com/wwf5067/newsfeed/internal/model"
@@ -107,21 +109,32 @@ func (b *BaiduHot) Fetch(ctx context.Context) ([]model.Article, error) {
 		return nil, fmt.Errorf("baidu api error %d: %s", parsed.Error.Code, parsed.Error.Message)
 	}
 
-	// 收集全部条目:topContent(置顶/广告) + content(正式热榜),按 word 去重。
-	// 理论上只有一个 card,多 card 情况做兜底合并。
+	// 收集全部条目:topContent(置顶/广告) + content(正式热榜),按标准化词去重。
+	// 标准化:去空白+小写,同时做模糊匹配(编辑距离≤1 / 互为子串)过滤同一热词微小变体。
 	var items []baiduHotItem
-	seen := make(map[string]bool)
+	seenNorm := make([]string, 0, 64) // 已收录的标准化词列表(用于模糊匹配)
+	isDup := func(word string) bool {
+		norm := NormalizeBaiduWord(word)
+		if norm == "" {
+			return true
+		}
+		for _, s := range seenNorm {
+			if IsSimilarWord(norm, s) {
+				return true
+			}
+		}
+		seenNorm = append(seenNorm, norm)
+		return false
+	}
 	for _, card := range parsed.Data.Cards {
 		for _, it := range card.TopContent {
-			if it.Word != "" && !seen[it.Word] {
+			if it.Word != "" && !isDup(it.Word) {
 				items = append(items, it)
-				seen[it.Word] = true
 			}
 		}
 		for _, it := range card.Content {
-			if it.Word != "" && !seen[it.Word] {
+			if it.Word != "" && !isDup(it.Word) {
 				items = append(items, it)
-				seen[it.Word] = true
 			}
 		}
 	}
@@ -145,9 +158,10 @@ func (b *BaiduHot) Fetch(ctx context.Context) ([]model.Article, error) {
 	for i, it := range items {
 		score, _ := strconv.ParseInt(it.HotScore, 10, 64)
 
-		// 用关键词构造稳定 URL,确保同一热词多次抓取命中同一行(upsert 去重)。
+		// 用标准化后的关键词构造稳定 URL,确保同一热词(不论空格/大小写变体)
+		// 多次抓取命中同一行(upsert 去重)。
 		// 不直接用 rawUrl 是因为其中可能含时间戳参数导致 URL 每次不同。
-		articleURL := "https://www.baidu.com/s?wd=" + url.QueryEscape(it.Word) + "&sa=top_hot"
+		articleURL := "https://www.baidu.com/s?wd=" + url.QueryEscape(NormalizeBaiduWord(it.Word)) + "&sa=top_hot"
 
 		articles = append(articles, model.Article{
 			URL:         articleURL,
@@ -180,6 +194,87 @@ func formatBaiduHeat(score int64) string {
 	default:
 		return fmt.Sprintf("%d 热搜", score)
 	}
+}
+
+// NormalizeBaiduWord 标准化热搜词用于去重 URL 构造:
+//  1. 去除所有空白字符(包括全角空格)
+//  2. 英文转小写
+//
+// 目的:百度 API 同一个热词有时带空格有时不带("小米 SU7" vs "小米SU7"),
+// 标准化后生成稳定的 URL 去重 key。
+func NormalizeBaiduWord(word string) string {
+	var b strings.Builder
+	b.Grow(len(word))
+	for _, r := range word {
+		if unicode.IsSpace(r) {
+			continue
+		}
+		b.WriteRune(unicode.ToLower(r))
+	}
+	return b.String()
+}
+
+// IsSimilarWord 判断两个标准化后的词是否"几乎相同":
+//   - 完全相同 → true
+//   - 一个是另一个的子串(包含关系) → true
+//   - 编辑距离 ≤ 1(只差一个字) → true
+//
+// 用于批内去重:同一次 API 返回或跨次拉取中,同一热词略有变形的情况。
+func IsSimilarWord(a, b string) bool {
+	if a == b {
+		return true
+	}
+	// 包含关系(覆盖"杭州楼市新政" vs "杭州楼市新政策"类长串)
+	if strings.Contains(a, b) || strings.Contains(b, a) {
+		return true
+	}
+	// 编辑距离 ≤ 1:按 rune 比较
+	ra := []rune(a)
+	rb := []rune(b)
+	la, lb := len(ra), len(rb)
+	if abs(la-lb) > 1 {
+		return false
+	}
+	if la == lb {
+		// 同长度:最多一个位置不同
+		diff := 0
+		for i := 0; i < la; i++ {
+			if ra[i] != rb[i] {
+				diff++
+				if diff > 1 {
+					return false
+				}
+			}
+		}
+		return diff <= 1
+	}
+	// 长度差 1:检查是否只多/少一个字符
+	if la < lb {
+		ra, rb = rb, ra
+		la, lb = lb, la
+	}
+	// ra 比 rb 多一个 rune
+	diff := 0
+	j := 0
+	for i := 0; i < la && j < lb; i++ {
+		if ra[i] != rb[j] {
+			diff++
+			if diff > 1 {
+				return false
+			}
+			// 跳过 ra 中多出的那个字符,j 不动
+			continue
+		}
+		j++
+	}
+	return true
+}
+
+func abs(x int) int {
+	if x < 0 {
+		return -x
+	}
+	return x
 }
 
 // 编译期接口断言。
