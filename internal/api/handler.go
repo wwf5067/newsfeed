@@ -220,7 +220,12 @@ func (h *Handler) ListTrackers(w http.ResponseWriter, r *http.Request) {
 
 	// 事件聚类:把共享实体的文章合并为事件组,提升首页信息密度。
 	heatDiscovered := collectHeatDiscoveredWords(articles)
-	resp.Events = clusterTrackerEvents(articles, heatDiscovered, 8)
+	// 构建 deltaByID 供 clusterTrackerEvents 计算事件 momentum。
+	deltaByID := make(map[int64]WindowDelta, len(deltas))
+	for _, d := range deltas {
+		deltaByID[d.ArticleID] = d
+	}
+	resp.Events = clusterTrackerEvents(articles, heatDiscovered, deltaByID, 8)
 
 	// 热度候选词持久化(异步,不阻塞响应):将发现的热词写入 DB,检查转正。
 	if len(heatDiscovered) > 0 {
@@ -496,8 +501,8 @@ func (h *Handler) GetHotlist(w http.ResponseWriter, r *http.Request) {
 // 在独立 goroutine 中执行,不阻塞 HTTP 响应。
 func (h *Handler) persistHeatCandidates(discovered map[string]struct{}, articles []model.Article) {
 	const (
-		promoteMinDays = 3  // 连续 3 天出现
-		promoteMinHits = 10 // 累计至少 10 篇文章命中
+		promoteMinDays = 2 // 连续 2 天出现(个人项目流量较低,降低门槛)
+		promoteMinHits = 5 // 累计至少 5 篇文章命中
 	)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

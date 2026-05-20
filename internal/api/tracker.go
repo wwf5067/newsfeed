@@ -913,6 +913,13 @@ func extractTrackerCandidates(article model.Article, heatDiscovered map[string]s
 		kind := "keyword"
 		if forced || looksLikeEntity(label) {
 			kind = "entity"
+		} else if heatFound || repeated {
+			// heat-discovered / repeated 词跳过了 shouldKeepTrackerToken,
+			// 但 looksLikeEntity 的启发式规则覆盖不到它们 —
+			// 用 POS 分词器推断更准确的 entity/keyword 归类。
+			if inferWordKind(label) == "entity" {
+				kind = "entity"
+			}
 		}
 		related := []string{}
 		if kind == "entity" {
@@ -2073,17 +2080,56 @@ func trackerMomentumRank(momentum string) int {
 	}
 }
 
+// truncateTitleAtWordBoundary 在 maxRunes 处截断标题,但尽量在词边界处切断,
+// 避免把一个中文词劈开显示(如"暗杀" → "暗" 末尾)。
+//
+// 策略:
+//  1. 若标题长度 ≤ maxRunes,直接返回原串。
+//  2. 用 GSE 分词把标题切成词序列,从头累积到不超过 maxRunes 为止,
+//     取最后一个完整词的结尾作为切断点。
+//  3. GSE 不可用时(fallback)直接按 maxRunes 截断。
+//  4. 截断后追加 "…" 省略号。
+func truncateTitleAtWordBoundary(title string, maxRunes int) string {
+	runes := []rune(title)
+	if len(runes) <= maxRunes {
+		return title
+	}
+
+	tokens := segmentTitle(title)
+	if len(tokens) > 0 {
+		var pos int   // 当前光标(rune 偏移)
+		var cutAt int // 最近一次完整词结尾
+		for _, tok := range tokens {
+			tokLen := utf8.RuneCountInString(tok)
+			if pos+tokLen > maxRunes {
+				break
+			}
+			pos += tokLen
+			cutAt = pos
+		}
+		if cutAt > 0 {
+			return string(runes[:cutAt]) + "…"
+		}
+	}
+
+	// fallback: 硬截断
+	return string(runes[:maxRunes]) + "…"
+}
+
 // clusterTrackerEvents 将文章按共享实体聚类为事件组。
 //
 // 算法:
 //  1. 为每篇文章提取实体/关键词集合(复用 extractTrackerCandidates)
-//  2. 用倒排索引(entity → articleIDs)找共现文章对
+//  2. 用倒排索引(仅 entity → articleIDs,关键词不作为连接器)找共现文章对
 //  3. 共享 ≥2 个实体的文章用 Union-Find 合并为同一组
 //  4. 每组选最高热度文章标题为代表,聚合实体/关键词/来源
 //  5. 只保留 count≥2 的组(单篇文章不算事件),按 score 降序
 //
+// deltaByID 用于计算每个事件的真实 momentum(升温/回落/持平)。
+// 传 nil 时退化为 "flat"。
+//
 // 性能: 对 500 篇文章 < 20ms(倒排索引避免 O(N²))。
-func clusterTrackerEvents(articles []model.Article, heatDiscovered map[string]struct{}, limit int) []trackerEventGroup {
+func clusterTrackerEvents(articles []model.Article, heatDiscovered map[string]struct{}, deltaByID map[int64]WindowDelta, limit int) []trackerEventGroup {
 	if len(articles) == 0 {
 		return nil
 	}
@@ -2091,7 +2137,6 @@ func clusterTrackerEvents(articles []model.Article, heatDiscovered map[string]st
 		limit = 8
 	}
 
-	// Step 1: 每篇文章的实体/关键词集合
 	type articleMeta struct {
 		id        int64
 		title     string
@@ -2099,7 +2144,6 @@ func clusterTrackerEvents(articles []model.Article, heatDiscovered map[string]st
 		heatValue int64
 		entities  []string
 		keywords  []string
-		allLabels map[string]struct{}
 	}
 
 	metas := make([]articleMeta, 0, len(articles))
@@ -2115,10 +2159,8 @@ func clusterTrackerEvents(articles []model.Article, heatDiscovered map[string]st
 			title:     a.Title,
 			sourceKey: a.SourceKey,
 			heatValue: a.HeatValue,
-			allLabels: make(map[string]struct{}),
 		}
 		for _, c := range candidates {
-			meta.allLabels[c.Label] = struct{}{}
 			if c.Kind == "entity" {
 				meta.entities = append(meta.entities, c.Label)
 			} else {
@@ -2133,11 +2175,13 @@ func clusterTrackerEvents(articles []model.Article, heatDiscovered map[string]st
 		return nil
 	}
 
-	// Step 2: 倒排索引 entity → 文章索引列表
+	// Step 2: 倒排索引 — 仅用 entity 做连接器,keyword 不参与。
+	// 原因:通用关键词(如"暴跌""合作""峰会")会把无关事件误聚类。
+	// 真正的事件聚类靠"具体命名实体"共现来确认(如"普京/俄罗斯/访华")。
 	entityToArticles := make(map[string][]int)
 	for i, meta := range metas {
-		for label := range meta.allLabels {
-			entityToArticles[label] = append(entityToArticles[label], i)
+		for _, e := range meta.entities {
+			entityToArticles[e] = append(entityToArticles[e], i)
 		}
 	}
 
@@ -2161,10 +2205,8 @@ func clusterTrackerEvents(articles []model.Article, heatDiscovered map[string]st
 	}
 
 	// hubEntities 是聚类中的"枢纽 entity" — 高频出现在多个不相关事件里。
-	// 它们在 pairCount 里不计数,避免"中俄关系" + "中美关税" + "巴西世界杯"
-	// 通过共享"中国/美国/巴西"等大国名 串成一个超级事件团。
-	// 真正的事件聚类靠"具体小实体"共现来确认(如"普京/俄罗斯/访华"3 个具体词
-	// 同现 → 这是同一事件)。
+	// 它们不参与共现计数,避免"中俄关系" + "中美关税" + "巴西世界杯"
+	// 通过共享"中国/美国"等大国名串成一个超级事件团。
 	hubEntities := map[string]struct{}{
 		"中国": {}, "美国": {}, "日本": {}, "韩国": {}, "俄罗斯": {},
 		"印度": {}, "英国": {}, "法国": {}, "德国": {},
@@ -2172,13 +2214,10 @@ func clusterTrackerEvents(articles []model.Article, heatDiscovered map[string]st
 		"AI": {},
 	}
 
-	// 对每对共享 entity 的文章,检查是否共享 ≥2 个非 hub label 再合并。
-	// 阈值仍是 ≥2,但 hub entity 不计数 — 大幅降低误聚类:
-	// 之前实测"中俄关系"事件团聚了 52 篇文章,因为只要"中国"+"美国" 或
-	// "中国"+"巴西" 同现就连边,把"普京访华 / 特朗普关税 / 内马尔回归"
-	// 等多个独立事件串成一个超级事件团。
-	// 现在 "中国/美国/俄罗斯" 等大国名不再充当连接器,真正的事件靠具体小
-	// 实体(普京/访华、内马尔/世界杯、特朗普/关税 等)共现来确认。
+	// 现在索引里只有 entity(非 keyword),因此连接信号更强 — 任意一对文章
+	// 共享 ≥1 个非 hub 实体即合并(原来需要 ≥2 是为了过滤掉高频 keyword 干扰)。
+	// threshold=1 + entity-only 索引 ≈ 原来的 threshold=2 + allLabels 的严格程度,
+	// 且彻底消除了通用动词(暴跌/合作/峰会)充当误聚类连接器的问题。
 	pairCount := make(map[[2]int]int)
 	for label, idxList := range entityToArticles {
 		if _, isHub := hubEntities[label]; isHub {
@@ -2195,7 +2234,7 @@ func clusterTrackerEvents(articles []model.Article, heatDiscovered map[string]st
 				}
 				key := [2]int{a, b}
 				pairCount[key]++
-				if pairCount[key] == 2 {
+				if pairCount[key] == 1 {
 					union(a, b)
 				}
 			}
@@ -2216,13 +2255,15 @@ func clusterTrackerEvents(articles []model.Article, heatDiscovered map[string]st
 			continue // 单篇文章不算事件
 		}
 
-		// 找最高热度文章作为代表
+		// 找最高热度文章作为代表;同时累积 momentum 数据
 		var bestIdx int
 		var bestHeat int64
 		entitySet := make(map[string]struct{})
 		keywordSet := make(map[string]struct{})
 		sourceCount := make(map[string]int)
 		var totalScore int64
+		var windowDelta int64
+		var newCount int
 
 		for _, idx := range members {
 			meta := metas[idx]
@@ -2238,24 +2279,30 @@ func clusterTrackerEvents(articles []model.Article, heatDiscovered map[string]st
 			for _, k := range meta.keywords {
 				keywordSet[k] = struct{}{}
 			}
+			if deltaByID != nil {
+				if d, ok := deltaByID[meta.id]; ok {
+					windowDelta += d.Delta
+					if d.IsNewInWindow {
+						newCount++
+					}
+				}
+			}
 		}
 
-		// 代表标题截取
-		title := metas[bestIdx].title
-		titleRunes := []rune(title)
-		if len(titleRunes) > 25 {
-			title = string(titleRunes[:25])
-		}
+		// 代表标题:在词边界处截断,避免切断中文词
+		title := truncateTitleAtWordBoundary(metas[bestIdx].title, 25)
 
-		// 实体/关键词列表
+		// 实体/关键词列表 — 排序保证输出稳定
 		entities := make([]string, 0, len(entitySet))
 		for e := range entitySet {
 			entities = append(entities, e)
 		}
+		sort.Strings(entities)
 		keywords := make([]string, 0, len(keywordSet))
 		for k := range keywordSet {
 			keywords = append(keywords, k)
 		}
+		sort.Strings(keywords)
 
 		// Top 3 文章
 		topArticles := make([]trackerArticleRef, 0, 3)
@@ -2290,7 +2337,7 @@ func clusterTrackerEvents(articles []model.Article, heatDiscovered map[string]st
 			Keywords: keywords,
 			Score:    totalScore,
 			Count:    len(members),
-			Momentum: "flat", // 简化:事件组暂不做 momentum 计算
+			Momentum: detectMomentum(windowDelta, newCount),
 			Sources:  flattenTrackerSources(sourceCount),
 			Articles: topArticles,
 		})

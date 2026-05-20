@@ -33,7 +33,7 @@ func TestEventClustering(t *testing.T) {
 
 	// 先计算 heatDiscovered(和 buildTrackerTopics 一样)
 	heatDiscovered := collectHeatDiscoveredWords(articles)
-	events := clusterTrackerEvents(articles, heatDiscovered, 10)
+	events := clusterTrackerEvents(articles, heatDiscovered, nil, 10)
 
 	fmt.Println("========== 事件聚类结果 ==========")
 	fmt.Println()

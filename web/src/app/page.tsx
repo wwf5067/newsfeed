@@ -321,38 +321,60 @@ function TopicGroup({
 
   return (
     <section className="rounded-lg border border-zinc-200 bg-white shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
-      {/* 话题头 */}
-      <div className="flex items-center justify-between gap-3 px-4 py-3">
-        <div className="flex min-w-0 flex-wrap items-center gap-2">
+      {/* 话题头: px-3 py-2.5 与事件卡片保持一致 */}
+      <div className="flex items-center gap-2 px-3 py-2.5">
+        <div className="flex min-w-0 flex-1 items-center gap-2">
           <Link
             href={`/tracker?term=${encodeURIComponent(topic.label)}&window=${windowHours}`}
-            className="text-[15px] font-semibold text-zinc-900 hover:text-amber-700 dark:text-zinc-100 dark:hover:text-amber-300"
+            className="text-[14px] font-semibold leading-snug text-zinc-900 hover:text-amber-700 dark:text-zinc-100 dark:hover:text-amber-300"
           >
             {topic.label}
           </Link>
-          <span className={`text-xs font-medium ${m.cls}`}>{m.icon} {m.text}</span>
+          <span className={`shrink-0 text-[11px] font-medium ${m.cls}`}>{m.icon} {m.text}</span>
         </div>
-        <span className="shrink-0 text-sm font-medium tabular-nums text-emerald-600 dark:text-emerald-400">
+        <span className="shrink-0 text-xs font-medium tabular-nums text-emerald-600 dark:text-emerald-400">
           {formatHeat(topic.score)}
         </span>
       </div>
 
-      {/* 文章列表 */}
-      <div className="border-t border-zinc-100 dark:border-zinc-800">
+      {/* 关联词 chips + 时间线链接: 与事件卡片实体行保持一致 */}
+      {topic.related_terms.length > 0 && (
+        <div className="flex flex-wrap items-center gap-1 border-t border-zinc-50 px-3 py-1.5 dark:border-zinc-800/50">
+          {topic.related_terms.slice(0, 5).map((term) => (
+            <button
+              key={term}
+              type="button"
+              onClick={() => onSearch(term)}
+              className="rounded-full bg-amber-50 px-1.5 py-0.5 text-[11px] font-medium text-amber-700 hover:bg-amber-100 dark:bg-amber-950 dark:text-amber-300 dark:hover:bg-amber-900"
+            >
+              {term}
+            </button>
+          ))}
+          <Link
+            href={`/tracker?term=${encodeURIComponent(topic.label)}&window=${windowHours}`}
+            className="ml-auto shrink-0 text-[11px] text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200"
+          >
+            时间线 →
+          </Link>
+        </div>
+      )}
+
+      {/* 文章列表: px-3 py-2 text-[13px] 与事件卡片文章行保持一致 */}
+      <div className="border-t border-zinc-50 dark:border-zinc-800/50">
         {displayArticles.map((a) => (
           <Link
             key={a.id}
             href={`/article?id=${a.id}`}
-            className="flex items-center gap-3 border-b border-zinc-50 px-4 py-2.5 transition last:border-b-0 hover:bg-zinc-50 dark:border-zinc-800/50 dark:hover:bg-zinc-800/50"
+            className="flex items-center gap-2 border-b border-zinc-50 px-3 py-2 transition last:border-b-0 hover:bg-zinc-50 dark:border-zinc-800/50 dark:hover:bg-zinc-800/50"
           >
-            <span className="min-w-0 flex-1 truncate text-sm text-zinc-800 dark:text-zinc-200">
+            <span className="min-w-0 flex-1 truncate text-[13px] text-zinc-700 dark:text-zinc-300">
               {a.title}
             </span>
-            <span className="shrink-0 text-[11px] text-zinc-400">
+            <span className="shrink-0 text-[10px] text-zinc-400">
               {SOURCE_LABELS[a.source_key] ?? a.source_key}
             </span>
             {(a.heat || a.heat_value > 0) && (
-              <span className="shrink-0 text-[11px] font-medium tabular-nums text-red-500 dark:text-red-400">
+              <span className="shrink-0 text-[10px] font-medium tabular-nums text-red-500 dark:text-red-400">
                 {a.heat || formatHeat(a.heat_value)}
               </span>
             )}
@@ -360,21 +382,26 @@ function TopicGroup({
         ))}
       </div>
 
-      {/* 底部: 展开/关联词/时间线 */}
-      <div className="flex flex-wrap items-center gap-2 border-t border-zinc-100 px-4 py-2 dark:border-zinc-800">
+      {/* 底部: 文章数 + 展开 + 来源 chips (与事件卡片底部保持一致) */}
+      <div className="flex flex-wrap items-center gap-1.5 border-t border-zinc-50 px-3 py-1.5 dark:border-zinc-800/50">
+        <span className="text-[11px] text-zinc-400">{articles.length} 篇</span>
         {hasMore && (
-          <button type="button" onClick={() => setExpanded((v) => !v)} className="text-xs text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100">
-            {expanded ? "收起" : `展开更多(+${articles.length - 3}条)`}
+          <button
+            type="button"
+            onClick={() => setExpanded((v) => !v)}
+            className="text-[11px] text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100"
+          >
+            {expanded ? "收起" : `+${articles.length - 3} 更多`}
           </button>
         )}
-        {topic.related_terms.slice(0, 3).map((term) => (
-          <button key={term} type="button" onClick={() => onSearch(term)} className="rounded-full bg-zinc-100 px-2 py-0.5 text-[11px] text-zinc-600 transition hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-400 dark:hover:bg-zinc-700">
-            {term}
-          </button>
+        {topic.sources?.map((s) => (
+          <span
+            key={s.source_key}
+            className="rounded bg-zinc-100 px-1.5 py-0.5 text-[10px] text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400"
+          >
+            {SOURCE_LABELS[s.source_key] ?? s.source_key}&nbsp;{s.count}
+          </span>
         ))}
-        <Link href={`/tracker?term=${encodeURIComponent(topic.label)}&window=${windowHours}`} className="ml-auto text-[11px] text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200">
-          时间线 →
-        </Link>
       </div>
     </section>
   );
