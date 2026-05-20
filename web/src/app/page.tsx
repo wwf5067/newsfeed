@@ -151,7 +151,7 @@ async function fetchTrackers(windowHours: number): Promise<TrackerResp> {
   const res = await fetch(`/api/v1/trackers?${params.toString()}`, { cache: "no-store" });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const data: TrackerResp = await res.json();
-  return { window: data.window, items: data.items ?? [] };
+  return { window: data.window, items: data.items ?? [], events: data.events ?? [] };
 }
 
 async function fetchHotlist(): Promise<HotlistResp> {
