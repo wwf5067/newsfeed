@@ -503,6 +503,10 @@ var (
 // 原理:如果一个 2-4 汉字的词出现在 ≥3 篇不同文章的标题中,说明它是当前热点话题词,
 // 即使不在词典/strongVerbs/strongTopicNouns 中也应该被保留。
 //
+// 额外做 bigram 合并:gse 可能把人名/复合词切碎(如"段永平"→"段"+"永平",
+// "智商税"→"智商"+"税"),统计相邻 token 拼接的 bigram,如果 bigram 的文章频次
+// ≥ 其任一组成部分,则用 bigram 替代碎片。
+//
 // 使用轻量 normalize(不做 weak 过滤),否则短词在统计阶段就被消灭。
 // 安全防线:stopTokens 排除 + 词典已覆盖的排除 + 长度范围限制。
 //
@@ -515,10 +519,14 @@ func collectHeatDiscoveredWords(articles []model.Article) map[string]struct{} {
 		// 除非同一词在多个来源(baidu/weibo/zhihu)同时上榜才能超过 1。
 		minHanLen = 2 // 最少 2 个汉字
 		maxHanLen = 4 // 最多 4 个汉字(超过的已能被 looksLikeTopicPhrase 保留)
+		// bigram 合并允许的最大汉字长度(放宽到 5,覆盖三字姓名+修饰)
+		maxBigramHanLen = 5
 	)
 
 	// word → 出现在哪些文章(按 article ID 去重)
 	wordArticles := make(map[string]map[int64]struct{})
+	// bigram → 出现在哪些文章
+	bigramArticles := make(map[string]map[int64]struct{})
 
 	for _, article := range articles {
 		title := strings.TrimSpace(article.Title)
@@ -527,63 +535,144 @@ func collectHeatDiscoveredWords(articles []model.Article) map[string]struct{} {
 		}
 		// 用 gse 分词提取所有词
 		tokens := segmentTitle(title)
-		seen := make(map[string]struct{}) // 同一篇文章内去重
-		for _, tok := range tokens {
-			cleaned := normalizeLexiconAlias(tok)
-			if cleaned == "" || utf8.RuneCountInString(cleaned) < 2 {
-				continue
-			}
-			cleaned = canonicalizeTrackerToken(cleaned)
-			if cleaned == "" {
-				continue
-			}
-			// 长度范围过滤
-			hanLen := hanRuneCount(cleaned)
-			if hanLen < minHanLen || hanLen > maxHanLen {
-				continue
-			}
-			// 排除已在词典/白名单中的词(它们不需要被"发现")
-			if _, ok := trackerEntityLabelSet[cleaned]; ok {
-				continue
-			}
-			if _, ok := strongGeoNames[cleaned]; ok {
-				continue
-			}
-			if _, ok := strongVerbs[cleaned]; ok {
-				continue
-			}
-			if _, ok := strongTopicNouns[cleaned]; ok {
-				continue
-			}
-			// 排除 stopTokens
-			if _, ok := stopTokens[cleaned]; ok {
-				continue
-			}
-			// 排除纯数字/度量词
-			if isAllDigits(cleaned) || looksLikeNumericMeasure(cleaned) {
-				continue
-			}
-			// 同一篇文章内只计一次
-			if _, ok := seen[cleaned]; ok {
-				continue
-			}
-			seen[cleaned] = struct{}{}
+		if len(tokens) == 0 {
+			continue
+		}
 
-			if wordArticles[cleaned] == nil {
-				wordArticles[cleaned] = make(map[int64]struct{})
+		// 预处理: 标准化所有 token
+		normalized := make([]string, len(tokens))
+		for i, tok := range tokens {
+			cleaned := normalizeLexiconAlias(tok)
+			if cleaned == "" {
+				normalized[i] = ""
+				continue
 			}
-			wordArticles[cleaned][article.ID] = struct{}{}
+			normalized[i] = canonicalizeTrackerToken(cleaned)
+		}
+
+		seen := make(map[string]struct{})      // 同一篇文章内去重(unigram)
+		seenBigram := make(map[string]struct{}) // 同一篇文章内去重(bigram)
+
+		for i, cleaned := range normalized {
+			// --- unigram 统计 ---
+			if cleaned != "" && utf8.RuneCountInString(cleaned) >= 2 {
+				hanLen := hanRuneCount(cleaned)
+				if hanLen >= minHanLen && hanLen <= maxHanLen {
+					if !isExcludedHeatWord(cleaned) {
+						if _, ok := seen[cleaned]; !ok {
+							seen[cleaned] = struct{}{}
+							if wordArticles[cleaned] == nil {
+								wordArticles[cleaned] = make(map[int64]struct{})
+							}
+							wordArticles[cleaned][article.ID] = struct{}{}
+						}
+					}
+				}
+			}
+
+			// --- bigram 统计: 当前 token + 下一个 token ---
+			if i+1 < len(normalized) {
+				left := normalized[i]
+				right := normalized[i+1]
+				if left == "" || right == "" {
+					continue
+				}
+				bigram := left + right
+				bigramHanLen := hanRuneCount(bigram)
+				// bigram 汉字长度在 [minHanLen, maxBigramHanLen] 范围内
+				if bigramHanLen < minHanLen || bigramHanLen > maxBigramHanLen {
+					continue
+				}
+				// 排除已在词典中的(不需要发现)
+				if _, ok := trackerEntityLabelSet[bigram]; ok {
+					continue
+				}
+				if isExcludedHeatWord(bigram) {
+					continue
+				}
+				if _, ok := seenBigram[bigram]; !ok {
+					seenBigram[bigram] = struct{}{}
+					if bigramArticles[bigram] == nil {
+						bigramArticles[bigram] = make(map[int64]struct{})
+					}
+					bigramArticles[bigram][article.ID] = struct{}{}
+				}
+			}
 		}
 	}
 
-	// 筛选满足阈值的词
+	// 筛选满足阈值的 unigram
 	result := make(map[string]struct{})
-	for word, articles := range wordArticles {
-		if len(articles) >= minArticles {
+	for word, arts := range wordArticles {
+		if len(arts) >= minArticles {
 			result[word] = struct{}{}
 		}
 	}
+
+	// 筛选满足阈值的 bigram,并替代其碎片
+	// 规则:如果 bigram 频次 ≥ minArticles 且 ≥ 其任一组成部分的频次,
+	// 则优先保留 bigram,移除对应碎片。
+	for bigram, arts := range bigramArticles {
+		if len(arts) < minArticles {
+			continue
+		}
+		// bigram 达标,加入结果
+		result[bigram] = struct{}{}
+		// 检查 bigram 的组成部分是否在 result 中,如果是则移除碎片
+		// (避免同时出现"永平"和"段永平")
+		// 方法:遍历 unigram 结果,看是否是 bigram 的子串
+		for word := range result {
+			if word == bigram {
+				continue
+			}
+			if strings.Contains(bigram, word) {
+				// 碎片是 bigram 的一部分,检查频次:
+				// 如果碎片的频次不高于 bigram,移除碎片
+				if len(wordArticles[word]) <= len(arts) {
+					delete(result, word)
+				}
+			}
+		}
+	}
+
 	return result
+}
+
+// isExcludedHeatWord 判断一个词是否应被热词发现排除。
+//
+// 自动泛化词过滤:利用 gse 词典词频作为"通用度"指标。
+// 词频 > heatFreqThreshold 的词属于日常高频用词(如"朋友""合作""数据"),
+// 在热搜标题中虽然跨文章高频,但本身没有话题追踪价值。
+// 词频 ≤ 阈值或不在词典中的词(如"武契奇""智商税""段永平")则是有信息量的。
+const heatFreqThreshold = 2000
+
+func isExcludedHeatWord(word string) bool {
+	if _, ok := trackerEntityLabelSet[word]; ok {
+		return true
+	}
+	if _, ok := strongGeoNames[word]; ok {
+		return true
+	}
+	if _, ok := strongVerbs[word]; ok {
+		return true
+	}
+	if _, ok := strongTopicNouns[word]; ok {
+		return true
+	}
+	if _, ok := stopTokens[word]; ok {
+		return true
+	}
+	if isAllDigits(word) || looksLikeNumericMeasure(word) {
+		return true
+	}
+	// 自动泛化词过滤:gse 词典词频 > 阈值 → 太通用,不值得作为热词
+	trackerSegOnce.Do(loadTrackerSegmenter)
+	if trackerSegErr == nil {
+		if freq, _, ok := trackerSeg.Find(word); ok && freq > heatFreqThreshold {
+			return true
+		}
+	}
+	return false
 }
 
 func buildTrackerTopics(
