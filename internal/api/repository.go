@@ -180,7 +180,7 @@ LIMIT $2
 //
 // 参数:
 //   - terms:别名列表,空切片直接返回 nil
-//   - sinceHours:0 表示不限时间,>0 限制 fetched_at >= NOW() - sinceHours
+//   - sinceHours:0 表示不限时间,>0 限制 published_at >= NOW() - sinceHours
 //   - limit:默认 200,>500 截断到 500
 //
 // 安全:每个 term 走 $N 参数化绑定,不拼字符串,杜绝 SQL 注入。
@@ -215,7 +215,7 @@ func (r *Repository) ListArticlesByTerms(
 
 	if sinceHours > 0 {
 		args = append(args, sinceHours)
-		where += fmt.Sprintf(" AND fetched_at >= NOW() - make_interval(hours => $%d)", len(args))
+		where += fmt.Sprintf(" AND published_at >= NOW() - make_interval(hours => $%d)", len(args))
 	}
 
 	args = append(args, limit)
