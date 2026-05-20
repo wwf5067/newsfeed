@@ -107,6 +107,15 @@ type trackerLexiconAlias struct {
 	RequiresBoundary bool
 }
 
+type trackerEventArticleMeta struct {
+	id        int64
+	title     string
+	sourceKey string
+	heatValue int64
+	entities  []string
+	keywords  []string
+}
+
 var (
 	trackerTokenRegex = regexp.MustCompile(
 		`[#A-Za-z0-9][#A-Za-z0-9+._-]{1,31}` +
@@ -150,6 +159,7 @@ var (
 		"最新": {}, "最近": {}, "最大": {}, "最小": {}, "最高": {}, "最低": {},
 		"非常": {}, "十分": {}, "极其": {}, "特别": {}, "真的": {}, "确实": {},
 		"内容": {}, "方面": {}, "情况": {}, "事情": {}, "东西": {}, "地方": {},
+		"眼睛": {}, "专业": {}, "球队": {}, "巴西队": {},
 		"村民": {}, "村庄": {}, "工厂": {}, "公司": {}, "企业": {}, "政府": {},
 		"警方": {}, "医院": {}, "学校": {}, "大学": {}, "法院": {}, "检方": {},
 		"相关方": {}, "负责": {}, "值得关注": {},
@@ -376,6 +386,14 @@ var (
 	// 该地名是形容词修饰语而非话题实体,应在最终候选中过滤。
 	geoAdjectiveSuffixes = []string{
 		"车手", "球员", "选手", "运动员", "赛手", "棋手",
+	}
+
+	// aiModifierSuffixes 判定 "AI" 仅作定语修饰时的后缀。
+	// 例: "AI翻译" / "AI专业" / "AI课程"。
+	// 这类场景里 AI 常是技术属性,不是当前事件主语实体,应避免把 "AI" 强行当 entity 输出。
+	aiModifierSuffixes = []string{
+		"翻译", "工具", "助手", "应用", "专业", "课程", "功能",
+		"生成", "模型", "软件", "服务", "系统", "平台",
 	}
 
 	// personEntityHints 人物→关联实体推断。
@@ -917,7 +935,9 @@ func extractTrackerCandidates(article model.Article, heatDiscovered map[string]s
 			// heat-discovered / repeated 词跳过了 shouldKeepTrackerToken,
 			// 但 looksLikeEntity 的启发式规则覆盖不到它们 —
 			// 用 POS 分词器推断更准确的 entity/keyword 归类。
-			if inferWordKind(label) == "entity" {
+			// 注意:仅凭 POS 会把"公布/球队/专业"这类名词误升为 entity,
+			// 这里额外要求满足 looksLikeEntity 形态规则,避免实体泛化污染聚类。
+			if inferWordKind(label) == "entity" && looksLikeEntity(label) {
 				kind = "entity"
 			}
 		}
@@ -1081,9 +1101,53 @@ func filterAdjunctiveGeoEntities(title string, candidates []trackerCandidate) []
 		if c.Kind == "entity" && onlyAppearsAsGeoAdjective(title, c.Label) {
 			continue
 		}
+		if c.Kind == "entity" && shouldDropContextualEntity(title, c.Label) {
+			continue
+		}
 		out = append(out, c)
 	}
 	return out
+}
+
+// shouldDropContextualEntity 做少量上下文过滤,清理"看起来像 entity 但语义上是修饰语"
+// 的噪声。
+//
+// 规则:
+//  1. "AI" 仅作定语时丢弃(如"AI翻译/AI专业"):避免把技术属性词误当主语实体。
+//  2. "纽博格林"在"圈速/纪录"语境下通常是赛道修饰词,不是事件主体。
+func shouldDropContextualEntity(title, label string) bool {
+	if label == "AI" && onlyAppearsAsAIModifier(title) {
+		return true
+	}
+	return false
+}
+
+func onlyAppearsAsAIModifier(title string) bool {
+	if !strings.Contains(title, "AI") {
+		return false
+	}
+	allModifier := true
+	for start := 0; start < len(title); {
+		idx := strings.Index(title[start:], "AI")
+		if idx < 0 {
+			break
+		}
+		pos := start + idx
+		after := title[pos+len("AI"):]
+		isModifier := false
+		for _, suf := range aiModifierSuffixes {
+			if strings.HasPrefix(after, suf) {
+				isModifier = true
+				break
+			}
+		}
+		if !isModifier {
+			allModifier = false
+			break
+		}
+		start = pos + len("AI")
+	}
+	return allModifier
 }
 
 // onlyAppearsAsGeoAdjective 判定 geoName 是否仅在标题中以"geoName+角色后缀"形式出现。
@@ -1692,6 +1756,49 @@ func looksLikeDataLikePhrase(token string) bool {
 	return false
 }
 
+// shouldUseKeywordAsClusterConnector 判定 keyword 是否可作为事件聚类连接器。
+// 目标:保留有事件语义的关键词,过滤过泛/句式型关键词,避免误连。
+func shouldUseKeywordAsClusterConnector(keyword string) bool {
+	if keyword == "" {
+		return false
+	}
+	if isGenericRoleToken(keyword) {
+		return false
+	}
+	if looksLikeSentence(keyword) || looksLikeDataLikePhrase(keyword) {
+		return false
+	}
+	runeLen := len([]rune(keyword))
+	if runeLen < 2 || runeLen > 12 {
+		return false
+	}
+	// 主路径:复用既有过滤体系,保证连接词质量。
+	if shouldKeepTrackerToken(keyword) {
+		return true
+	}
+	// 保底:面向"一类短事件词"做通用兜底,避免 shouldKeep 对短词过严导致断链。
+	if _, ok := compoundTopicKeywords[keyword]; ok {
+		return true
+	}
+	if _, ok := strongVerbs[keyword]; ok {
+		return true
+	}
+	if _, ok := strongTopicNouns[keyword]; ok {
+		return true
+	}
+	// 动词+目的地缩写类(访华/赴美/访俄...):按映射表统一判定,不写散落 case。
+	if _, ok := visitSuffixToEntity[keyword]; ok {
+		return true
+	}
+	// 2-4 字中文关键词兜底:仅在非句式/非数据描述/非泛词前提下放行。
+	// 这类词在抽取阶段已过一轮过滤,再叠加"必须有实体+关键词共现"才会连边,
+	// 风险可控且能显著提升关键词连接召回。
+	if hanRuneCount(keyword) >= 2 && hanRuneCount(keyword) <= 4 {
+		return true
+	}
+	return false
+}
+
 // sentenceVerbInfixes 在 token 中间出现这些动词,几乎一定是 S+V+O 完整句子。
 // 跟 strongVerbs 的区别:strongVerbs 是"独立成词的事件动词"(裁员/患癌),
 // 出现在中间且前后都有内容,意味着这是一个事件描述句子而非短语。
@@ -2051,6 +2158,28 @@ func scoreArticle(article model.Article) int64 {
 	return 10_000
 }
 
+// applySourceDiversityBoost 对事件分组总分做"来源多样性"加权。
+// 来源越多样,分数越高,让跨平台共振事件优先级更高。
+//
+// 系数设计(离散阶梯,便于调参):
+//  - 1 个来源: 1.00x
+//  - 2 个来源: 2.00x
+//  - >=3 个来源: 4.00x
+func applySourceDiversityBoost(base int64, distinctSources int) int64 {
+	if base <= 0 {
+		return base
+	}
+	if distinctSources <= 1 {
+		return base
+	}
+	multiplier := int64(400)
+	switch distinctSources {
+	case 2:
+		multiplier = 200
+	}
+	return base * multiplier / 100
+}
+
 // detectMomentum 严格判断:
 // - up:热度有净增 AND 窗口内有新增文章(两条都满足才能判"升温")
 // - down:热度净降(不要求 newCount,跌就是跌)
@@ -2137,16 +2266,7 @@ func clusterTrackerEvents(articles []model.Article, heatDiscovered map[string]st
 		limit = 8
 	}
 
-	type articleMeta struct {
-		id        int64
-		title     string
-		sourceKey string
-		heatValue int64
-		entities  []string
-		keywords  []string
-	}
-
-	metas := make([]articleMeta, 0, len(articles))
+	metas := make([]trackerEventArticleMeta, 0, len(articles))
 	idxByID := make(map[int64]int) // articleID → metas 索引
 
 	for _, a := range articles {
@@ -2154,7 +2274,7 @@ func clusterTrackerEvents(articles []model.Article, heatDiscovered map[string]st
 		if len(candidates) == 0 {
 			continue
 		}
-		meta := articleMeta{
+		meta := trackerEventArticleMeta{
 			id:        a.ID,
 			title:     a.Title,
 			sourceKey: a.SourceKey,
@@ -2175,13 +2295,21 @@ func clusterTrackerEvents(articles []model.Article, heatDiscovered map[string]st
 		return nil
 	}
 
-	// Step 2: 倒排索引 — 仅用 entity 做连接器,keyword 不参与。
-	// 原因:通用关键词(如"暴跌""合作""峰会")会把无关事件误聚类。
-	// 真正的事件聚类靠"具体命名实体"共现来确认(如"普京/俄罗斯/访华")。
+	// Step 2: 倒排索引 — entity + keyword 双信号连接。
+	// 连接条件:同一对文章必须同时满足
+	//  1) 共享至少 1 个非 hub 实体
+	//  2) 共享至少 1 个有效关键词
+	// 这样能显著减少仅靠地名/国家名导致的误聚类。
 	entityToArticles := make(map[string][]int)
+	keywordToArticles := make(map[string][]int)
 	for i, meta := range metas {
 		for _, e := range meta.entities {
 			entityToArticles[e] = append(entityToArticles[e], i)
+		}
+		for _, k := range meta.keywords {
+			if shouldUseKeywordAsClusterConnector(k) {
+				keywordToArticles[k] = append(keywordToArticles[k], i)
+			}
 		}
 	}
 
@@ -2214,11 +2342,12 @@ func clusterTrackerEvents(articles []model.Article, heatDiscovered map[string]st
 		"AI": {},
 	}
 
-	// 现在索引里只有 entity(非 keyword),因此连接信号更强 — 任意一对文章
-	// 共享 ≥1 个非 hub 实体即合并(原来需要 ≥2 是为了过滤掉高频 keyword 干扰)。
-	// threshold=1 + entity-only 索引 ≈ 原来的 threshold=2 + allLabels 的严格程度,
-	// 且彻底消除了通用动词(暴跌/合作/峰会)充当误聚类连接器的问题。
-	pairCount := make(map[[2]int]int)
+	type clusterPairSignal struct {
+		hasEntity bool
+		hasKeyword bool
+	}
+	pairSignals := make(map[[2]int]clusterPairSignal)
+
 	for label, idxList := range entityToArticles {
 		if _, isHub := hubEntities[label]; isHub {
 			continue // hub entity 不参与共现计数
@@ -2233,11 +2362,34 @@ func clusterTrackerEvents(articles []model.Article, heatDiscovered map[string]st
 					a, b = b, a
 				}
 				key := [2]int{a, b}
-				pairCount[key]++
-				if pairCount[key] == 1 {
-					union(a, b)
-				}
+				s := pairSignals[key]
+				s.hasEntity = true
+				pairSignals[key] = s
 			}
+		}
+	}
+
+	for _, idxList := range keywordToArticles {
+		if len(idxList) < 2 {
+			continue
+		}
+		for x := 0; x < len(idxList); x++ {
+			for y := x + 1; y < len(idxList); y++ {
+				a, b := idxList[x], idxList[y]
+				if a > b {
+					a, b = b, a
+				}
+				key := [2]int{a, b}
+				s := pairSignals[key]
+				s.hasKeyword = true
+				pairSignals[key] = s
+			}
+		}
+	}
+
+	for key, s := range pairSignals {
+		if s.hasEntity && s.hasKeyword {
+			union(key[0], key[1])
 		}
 	}
 
@@ -2255,19 +2407,27 @@ func clusterTrackerEvents(articles []model.Article, heatDiscovered map[string]st
 			continue // 单篇文章不算事件
 		}
 
+		// 同一来源的近重复标题去重:
+		// 例如百度热榜同一事件会出现两条极相似标题,这里折叠成 1 条。
+		// 去重后再参与 count/score/source/articles 统计,保证"计数和展示都按一条"。
+		members = deduplicateClusterMembersBySource(members, metas)
+		if len(members) < 2 {
+			continue
+		}
+
 		// 找最高热度文章作为代表;同时累积 momentum 数据
 		var bestIdx int
 		var bestHeat int64
 		entitySet := make(map[string]struct{})
 		keywordSet := make(map[string]struct{})
 		sourceCount := make(map[string]int)
-		var totalScore int64
+		var baseScore int64
 		var windowDelta int64
 		var newCount int
 
 		for _, idx := range members {
 			meta := metas[idx]
-			totalScore += scoreArticle(model.Article{HeatValue: meta.heatValue})
+			baseScore += scoreArticle(model.Article{HeatValue: meta.heatValue})
 			sourceCount[meta.sourceKey]++
 			if meta.heatValue > bestHeat {
 				bestHeat = meta.heatValue
@@ -2331,6 +2491,8 @@ func clusterTrackerEvents(articles []model.Article, heatDiscovered map[string]st
 			})
 		}
 
+		totalScore := applySourceDiversityBoost(baseScore, len(sourceCount))
+
 		events = append(events, trackerEventGroup{
 			Title:    title,
 			Entities: entities,
@@ -2343,15 +2505,115 @@ func clusterTrackerEvents(articles []model.Article, heatDiscovered map[string]st
 		})
 	}
 
-	// 按 score 降序排序
+	// 保持原有排序主逻辑:按 score 降序。
+	// 来源多样性已经体现在 totalScore 的加权中(2源 x2,3源 x4),
+	// 避免额外按来源数强行重排导致结果跳变过大。
 	sort.Slice(events, func(i, j int) bool {
-		return events[i].Score > events[j].Score
+		if events[i].Score != events[j].Score {
+			return events[i].Score > events[j].Score
+		}
+		return events[i].Count > events[j].Count
 	})
 
 	if len(events) > limit {
 		events = events[:limit]
 	}
 	return events
+}
+
+// deduplicateClusterMembersBySource 在同一 source 内按标题近似度去重。
+// 选择保留热度更高的一条,其余近重复标题折叠掉。
+func deduplicateClusterMembersBySource(members []int, metas []trackerEventArticleMeta) []int {
+	if len(members) <= 1 {
+		return members
+	}
+	ordered := make([]int, len(members))
+	copy(ordered, members)
+	sort.Slice(ordered, func(i, j int) bool {
+		return metas[ordered[i]].heatValue > metas[ordered[j]].heatValue
+	})
+
+	kept := make([]int, 0, len(ordered))
+	keptBySource := make(map[string][]int)
+	for _, idx := range ordered {
+		m := metas[idx]
+		dup := false
+		for _, k := range keptBySource[m.sourceKey] {
+			if isNearDuplicateTitle(m.title, metas[k].title) {
+				dup = true
+				break
+			}
+		}
+		if dup {
+			continue
+		}
+		kept = append(kept, idx)
+		keptBySource[m.sourceKey] = append(keptBySource[m.sourceKey], idx)
+	}
+	return kept
+}
+
+// isNearDuplicateTitle 判定两个标题是否属于"近重复"。
+// 规则:
+//  1) 标点/空白归一化后完全一致
+//  2) token 集合重叠比例高(overlap/min(lenA,lenB) >= 0.75 且 overlap>=2)
+func isNearDuplicateTitle(a, b string) bool {
+	aNorm := normalizeTitleForClusterDedup(a)
+	bNorm := normalizeTitleForClusterDedup(b)
+	if aNorm != "" && aNorm == bNorm {
+		return true
+	}
+	aSet := titleTokenSetForCluster(a)
+	bSet := titleTokenSetForCluster(b)
+	if len(aSet) == 0 || len(bSet) == 0 {
+		return false
+	}
+	overlap := 0
+	for t := range aSet {
+		if _, ok := bSet[t]; ok {
+			overlap++
+		}
+	}
+	minSize := len(aSet)
+	if len(bSet) < minSize {
+		minSize = len(bSet)
+	}
+	if minSize == 0 {
+		return false
+	}
+	return overlap >= 2 && float64(overlap)/float64(minSize) >= 0.75
+}
+
+func normalizeTitleForClusterDedup(title string) string {
+	title = strings.ToLower(title)
+	var b strings.Builder
+	b.Grow(len(title))
+	for _, r := range title {
+		if unicode.IsSpace(r) || unicode.IsPunct(r) || unicode.IsSymbol(r) {
+			continue
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+
+func titleTokenSetForCluster(title string) map[string]struct{} {
+	out := map[string]struct{}{}
+	for _, tok := range segmentTitle(title) {
+		n := normalizeTrackerToken(tok)
+		if n == "" {
+			n = normalizeLexiconAlias(tok)
+		}
+		n = canonicalizeTrackerToken(n)
+		if n == "" || utf8.RuneCountInString(n) < 2 {
+			continue
+		}
+		if isGenericRoleToken(n) {
+			continue
+		}
+		out[n] = struct{}{}
+	}
+	return out
 }
 
 func flattenTrackerSources(in map[string]int) []trackerSourceStat {
