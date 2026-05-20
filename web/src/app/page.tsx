@@ -878,9 +878,13 @@ export default function Home() {
                         </Link>
                       ))}
                       {event.keywords.map((k) => (
-                        <span key={k} className="rounded-full bg-zinc-100 px-2 py-0.5 text-xs text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400">
+                        <Link
+                          key={k}
+                          href={`/tracker?term=${encodeURIComponent(k)}&window=${trackerWindow}`}
+                          className="rounded-full bg-zinc-100 px-2 py-0.5 text-xs font-medium text-zinc-600 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-400 dark:hover:bg-zinc-700"
+                        >
                           {k}
-                        </span>
+                        </Link>
                       ))}
                     </div>
                     <div className="flex items-center gap-3 text-xs text-zinc-500 dark:text-zinc-400">
