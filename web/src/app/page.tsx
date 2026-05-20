@@ -715,7 +715,22 @@ export default function Home() {
       <header className="mb-5 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
         <h1 className="text-2xl font-semibold tracking-tight">Newsfeed</h1>
         <span className="text-sm text-zinc-500">
-          {loading ? "加载中…" : `共 ${total} 条`}
+          {loading ? "加载中…" : (
+            <>
+              共 {total} 条
+              {source && articles.length > 0 && (() => {
+                // 选定单一源时,展示"最近抓取时间"。articles 默认按 published_at DESC,
+                // 但 fetched_at 在同批次几乎一致,取数组里最大的最稳妥。
+                let maxFetched = "";
+                for (const a of articles) {
+                  if (a.fetched_at > maxFetched) maxFetched = a.fetched_at;
+                }
+                return maxFetched ? (
+                  <span className="ml-2 text-zinc-400">· 最近抓取 {formatRelativeTime(maxFetched)}</span>
+                ) : null;
+              })()}
+            </>
+          )}
         </span>
       </header>
 
