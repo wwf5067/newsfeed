@@ -181,6 +181,21 @@ var trackerEntityLexicon = []trackerLexiconEntry{
 	{Label: "文班亚马", Category: "person", Aliases: []string{"文班亚马", "Wembanyama", "wembanyama", "文班"}},
 	{Label: "詹姆斯", Category: "person", Aliases: []string{"勒布朗·詹姆斯", "LeBron", "lebron", "詹姆斯"}},
 	{Label: "库里", Category: "person", Aliases: []string{"库里", "Curry", "curry", "斯蒂芬·库里"}},
+	// 葡萄牙国家队骨干球员(常出现在大赛名单标题)
+	{Label: "B费", Category: "person", Aliases: []string{"B费", "B 费", "布鲁诺·费尔南德斯", "Bruno Fernandes"}},
+	{Label: "B席", Category: "person", Aliases: []string{"B席", "B 席", "贝尔纳多·席尔瓦", "Bernardo Silva"}},
+	{Label: "维蒂尼亚", Category: "person", Aliases: []string{"维蒂尼亚", "Vitinha"}},
+	{Label: "莱奥", Category: "person", Aliases: []string{"莱奥", "Rafael Leao", "拉法埃尔·莱奥"}},
+	{Label: "若塔", Category: "person", Aliases: []string{"若塔", "Diogo Jota"}},
+	{Label: "鲁本·迪亚斯", Category: "person", Aliases: []string{"鲁本·迪亚斯", "Ruben Dias"}},
+	// 阿根廷
+	{Label: "迪马利亚", Category: "person", Aliases: []string{"迪马利亚", "Di Maria"}},
+	// 法国
+	{Label: "格列兹曼", Category: "person", Aliases: []string{"格列兹曼", "Griezmann"}},
+	{Label: "登贝莱", Category: "person", Aliases: []string{"登贝莱", "Dembele"}},
+	// 英格兰
+	{Label: "哈里·凯恩", Category: "person", Aliases: []string{"哈里·凯恩", "Harry Kane", "凯恩"}},
+	{Label: "贝林厄姆", Category: "person", Aliases: []string{"贝林厄姆", "Bellingham"}},
 
 	// === 体育队伍(英超 / 西甲 / 意甲 / 德甲 / 法甲 / NBA / 国家队)===
 	// 这些队伍名经常出现在赛事标题里(阿森纳 1-0 战胜伯恩利、马刺 vs 雷霆),
