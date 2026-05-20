@@ -776,26 +776,6 @@ export default function Home() {
           placeholder="搜索…"
           className="ml-auto min-w-0 flex-1 rounded-md border border-zinc-200 bg-white px-3 py-1 text-sm outline-none placeholder:text-zinc-400 focus:border-zinc-400 dark:border-zinc-800 dark:bg-zinc-900 dark:focus:border-zinc-600"
         />
-        {/* 时间窗口(仅全部Tab话题视图时显示) */}
-        {isTopicView && (
-          <div className="flex gap-0.5">
-            {[6, 24, 72].map((w) => (
-              <button
-                key={w}
-                type="button"
-                onClick={() => setTrackerWindow(w)}
-                className={
-                  "rounded-full px-2 py-0.5 text-[11px] transition " +
-                  (trackerWindow === w
-                    ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
-                    : "text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200")
-                }
-              >
-                {w}h
-              </button>
-            ))}
-          </div>
-        )}
       </div>
 
       {/* 邮件订阅(折叠) */}
@@ -860,6 +840,23 @@ export default function Home() {
               <div className="mb-3 flex items-center gap-2">
                 <span className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">发生了什么大事</span>
                 <span className="text-base leading-none">⚡</span>
+                <div className="ml-auto flex gap-0.5">
+                  {[6, 24, 72].map((w) => (
+                    <button
+                      key={w}
+                      type="button"
+                      onClick={() => setTrackerWindow(w)}
+                      className={
+                        "rounded-full px-2 py-0.5 text-[11px] transition " +
+                        (trackerWindow === w
+                          ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
+                          : "text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200")
+                      }
+                    >
+                      {w}h
+                    </button>
+                  ))}
+                </div>
               </div>
               <div className="space-y-3">
                 {events.map((event, i) => (
@@ -905,6 +902,27 @@ export default function Home() {
               <div className="mb-3 flex items-center gap-2">
                 <span className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">哪些对象值得关注</span>
                 <span className="text-base leading-none">📌</span>
+                {/* 当 events 区块未渲染(events.length===0)时,关注对象成为顶部首块,
+                    这里再放一个时间窗口选择器以便用户随时切窗口。
+                    events 已有时,这里仍展示一份(操作直觉:每块都能切自己的窗口),
+                    state 是同一个 trackerWindow 共享。 */}
+                <div className="ml-auto flex gap-0.5">
+                  {[6, 24, 72].map((w) => (
+                    <button
+                      key={w}
+                      type="button"
+                      onClick={() => setTrackerWindow(w)}
+                      className={
+                        "rounded-full px-2 py-0.5 text-[11px] transition " +
+                        (trackerWindow === w
+                          ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
+                          : "text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200")
+                      }
+                    >
+                      {w}h
+                    </button>
+                  ))}
+                </div>
               </div>
               <div className="space-y-4">
                 {grouped.map(({ topic, articles: topicArticles }) => (
