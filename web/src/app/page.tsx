@@ -321,6 +321,8 @@ function TopicGroup({
   const [expanded, setExpanded] = useState(false);
   const displayArticles = expanded ? articles : articles.slice(0, 3);
   const hasMore = articles.length > 3;
+  const shownCount = articles.length;
+  const totalCount = topic.count;
 
   const momentumCfg: Record<string, { text: string; icon: string; cls: string }> = {
     up: { text: "升温", icon: "↗", cls: "text-emerald-600 dark:text-emerald-400" },
@@ -394,7 +396,9 @@ function TopicGroup({
 
       {/* 底部: 文章数 + 展开 + 来源 chips (与事件卡片底部保持一致) */}
       <div className="flex flex-wrap items-center gap-1.5 border-t border-zinc-50 px-3 py-1.5 dark:border-zinc-800/50">
-        <span className="text-[11px] text-zinc-400">{articles.length} 篇</span>
+        <span className="text-[11px] text-zinc-400">
+          {totalCount > shownCount ? `${totalCount} 篇（展示 ${shownCount}）` : `${totalCount} 篇`}
+        </span>
         {hasMore && (
           <button
             type="button"
@@ -414,6 +418,81 @@ function TopicGroup({
         ))}
       </div>
     </section>
+  );
+}
+
+function EventGroupCard({ event, windowHours }: { event: TrackerEventGroup; windowHours: number }) {
+  const [expanded, setExpanded] = useState(false);
+  const displayArticles = expanded ? event.articles : event.articles.slice(0, 3);
+  const hasMore = event.articles.length > 3;
+
+  return (
+    <div className="rounded-lg border border-zinc-200 bg-white shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
+      {/* 事件标题 + 热度 */}
+      <div className="flex items-center gap-2 px-3 py-2.5">
+        <h3 className="min-w-0 flex-1 text-[14px] font-semibold leading-snug text-zinc-900 dark:text-zinc-100">{event.title}</h3>
+        <span className="shrink-0 text-xs font-medium tabular-nums text-emerald-600 dark:text-emerald-400">
+          {formatHeat(event.score)}
+        </span>
+      </div>
+      {/* 实体 / 关键词 chips */}
+      {(event.entities.length > 0 || event.keywords.length > 0) && (
+        <div className="flex flex-wrap gap-1 border-t border-zinc-50 px-3 py-1.5 dark:border-zinc-800/50">
+          {event.entities.map((e) => (
+            <Link
+              key={e}
+              href={`/tracker?term=${encodeURIComponent(e)}&window=${windowHours}`}
+              className="rounded-full bg-amber-50 px-1.5 py-0.5 text-[11px] font-medium text-amber-700 hover:bg-amber-100 dark:bg-amber-950 dark:text-amber-300 dark:hover:bg-amber-900"
+            >
+              {e}
+            </Link>
+          ))}
+          {event.keywords.map((k) => (
+            <span key={k} className="rounded-full bg-zinc-100 px-1.5 py-0.5 text-[11px] text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400">
+              {k}
+            </span>
+          ))}
+        </div>
+      )}
+      {/* 相关文章列表(默认3条,可展开/收起) */}
+      {event.articles.length > 0 && (
+        <div className="border-t border-zinc-50 dark:border-zinc-800/50">
+          {displayArticles.map((a) => (
+            <Link
+              key={a.id}
+              href={`/article?id=${a.id}`}
+              className="flex items-center gap-2 border-b border-zinc-50 px-3 py-2 transition last:border-b-0 hover:bg-zinc-50 dark:border-zinc-800/50 dark:hover:bg-zinc-800/50"
+            >
+              <span className="min-w-0 flex-1 truncate text-[13px] text-zinc-700 dark:text-zinc-300">{a.title}</span>
+              <span className="shrink-0 text-[10px] text-zinc-400">{SOURCE_LABELS[a.source_key] ?? a.source_key}</span>
+              {a.heat_value > 0 && (
+                <span className="shrink-0 text-[10px] font-medium tabular-nums text-red-500 dark:text-red-400">{formatHeat(a.heat_value)}</span>
+              )}
+            </Link>
+          ))}
+        </div>
+      )}
+      {/* 底部:文章数 + 展开 + 来源 chips */}
+      <div className="flex flex-wrap items-center gap-1.5 border-t border-zinc-50 px-3 py-1.5 dark:border-zinc-800/50">
+        <span className="text-[11px] text-zinc-400">
+          {event.count > event.articles.length ? `${event.count} 篇（展示 ${event.articles.length}）` : `${event.count} 篇`}
+        </span>
+        {hasMore && (
+          <button
+            type="button"
+            onClick={() => setExpanded((v) => !v)}
+            className="text-[11px] text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100"
+          >
+            {expanded ? "收起" : `+${event.articles.length - 3} 更多`}
+          </button>
+        )}
+        {event.sources.map((s) => (
+          <span key={s.source_key} className="rounded bg-zinc-100 px-1.5 py-0.5 text-[10px] text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400">
+            {SOURCE_LABELS[s.source_key] ?? s.source_key}&nbsp;{s.count}
+          </span>
+        ))}
+      </div>
+    </div>
   );
 }
 
@@ -631,7 +710,9 @@ export default function Home() {
   // 拉取文章
   const refresh = useCallback(async () => {
     try {
-      const data = await fetchArticles(source, debouncedQ, page * PAGE_SIZE);
+      const topicViewLimit = 300;
+      const requestLimit = isTopicView ? topicViewLimit : page * PAGE_SIZE;
+      const data = await fetchArticles(source, debouncedQ, requestLimit);
       setArticles(data.items);
       setTotal(data.total);
       setHasMore(data.has_more);
@@ -642,7 +723,7 @@ export default function Home() {
       if (initialLoad.current) { setLoading(false); initialLoad.current = false; }
       setLoadingMore(false);
     }
-  }, [source, debouncedQ, page]);
+  }, [source, debouncedQ, page, isTopicView]);
 
   useEffect(() => {
     refresh();
@@ -698,9 +779,10 @@ export default function Home() {
     // 只使用 trackerWindow 窗口内抓取的文章参与分组,
     // 与后端 /trackers 和 /trackers/storyline 使用同一数据集,
     // 保证首页分组结果与点进实体页后看到的内容一致。
-    const cutoff = Date.now() - trackerWindow * 3600 * 1000;
+    const latestPublishedMs = windowedLatestPublishedMs(articles);
+    const cutoff = latestPublishedMs - trackerWindow * 3600 * 1000;
     const windowed = articles.filter((a) => {
-      try { return new Date(a.fetched_at).getTime() >= cutoff && a.source_key !== "bilibili_popular"; } catch { return true; }
+      try { return new Date(a.published_at).getTime() >= cutoff && a.source_key !== "bilibili_popular"; } catch { return true; }
     });
 
     const grouped: { topic: TrackerTopic; articles: Article[] }[] = [];
@@ -897,61 +979,7 @@ export default function Home() {
               </div>
               <div className="space-y-2">
                 {events.map((event, i) => (
-                  <div key={i} className="rounded-lg border border-zinc-200 bg-white shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
-                    {/* 事件标题 + 热度 */}
-                    <div className="flex items-center gap-2 px-3 py-2.5">
-                      <h3 className="min-w-0 flex-1 text-[14px] font-semibold leading-snug text-zinc-900 dark:text-zinc-100">{event.title}</h3>
-                      <span className="shrink-0 text-xs font-medium tabular-nums text-emerald-600 dark:text-emerald-400">
-                        {formatHeat(event.score)}
-                      </span>
-                    </div>
-                    {/* 实体 / 关键词 chips */}
-                    {(event.entities.length > 0 || event.keywords.length > 0) && (
-                      <div className="flex flex-wrap gap-1 border-t border-zinc-50 px-3 py-1.5 dark:border-zinc-800/50">
-                        {event.entities.map((e) => (
-                          <Link
-                            key={e}
-                            href={`/tracker?term=${encodeURIComponent(e)}&window=${trackerWindow}`}
-                            className="rounded-full bg-amber-50 px-1.5 py-0.5 text-[11px] font-medium text-amber-700 hover:bg-amber-100 dark:bg-amber-950 dark:text-amber-300 dark:hover:bg-amber-900"
-                          >
-                            {e}
-                          </Link>
-                        ))}
-                        {event.keywords.map((k) => (
-                          <span key={k} className="rounded-full bg-zinc-100 px-1.5 py-0.5 text-[11px] text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400">
-                            {k}
-                          </span>
-                        ))}
-                      </div>
-                    )}
-                    {/* 相关文章列表(最多3篇,后端已按热度排序) */}
-                    {event.articles.length > 0 && (
-                      <div className="border-t border-zinc-50 dark:border-zinc-800/50">
-                        {event.articles.map((a) => (
-                          <Link
-                            key={a.id}
-                            href={`/article?id=${a.id}`}
-                            className="flex items-center gap-2 border-b border-zinc-50 px-3 py-2 transition last:border-b-0 hover:bg-zinc-50 dark:border-zinc-800/50 dark:hover:bg-zinc-800/50"
-                          >
-                            <span className="min-w-0 flex-1 truncate text-[13px] text-zinc-700 dark:text-zinc-300">{a.title}</span>
-                            <span className="shrink-0 text-[10px] text-zinc-400">{SOURCE_LABELS[a.source_key] ?? a.source_key}</span>
-                            {a.heat_value > 0 && (
-                              <span className="shrink-0 text-[10px] font-medium tabular-nums text-red-500 dark:text-red-400">{formatHeat(a.heat_value)}</span>
-                            )}
-                          </Link>
-                        ))}
-                      </div>
-                    )}
-                    {/* 底部:文章数 + 来源 chips */}
-                    <div className="flex flex-wrap items-center gap-1.5 border-t border-zinc-50 px-3 py-1.5 dark:border-zinc-800/50">
-                      <span className="text-[11px] text-zinc-400">{event.count} 篇</span>
-                      {event.sources.map((s) => (
-                        <span key={s.source_key} className="rounded bg-zinc-100 px-1.5 py-0.5 text-[10px] text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400">
-                          {SOURCE_LABELS[s.source_key] ?? s.source_key}&nbsp;{s.count}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
+                  <EventGroupCard key={i} event={event} windowHours={trackerWindow} />
                 ))}
               </div>
             </div>
@@ -1073,4 +1101,13 @@ export default function Home() {
       )}
     </main>
   );
+}
+
+function windowedLatestPublishedMs(items: Article[]): number {
+  let latest = 0;
+  for (const it of items) {
+    const ts = new Date(it.published_at).getTime();
+    if (Number.isFinite(ts) && ts > latest) latest = ts;
+  }
+  return latest > 0 ? latest : 0;
 }

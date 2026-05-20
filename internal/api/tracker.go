@@ -2612,9 +2612,9 @@ func clusterTrackerEvents(articles []model.Article, heatDiscovered map[string]st
 		}
 		sort.Strings(keywords)
 
-		// Top 3 文章
-		topArticles := make([]trackerArticleRef, 0, 3)
-		// 按热度排序取 top 3
+		// 组内文章(按热度降序):前端默认展示前 3 条,支持展开全部。
+		eventArticles := make([]trackerArticleRef, 0, len(members))
+		// 按热度排序
 		type sortItem struct {
 			idx  int
 			heat int64
@@ -2626,12 +2626,9 @@ func clusterTrackerEvents(articles []model.Article, heatDiscovered map[string]st
 		sort.Slice(sorted, func(i, j int) bool {
 			return sorted[i].heat > sorted[j].heat
 		})
-		for i, s := range sorted {
-			if i >= 3 {
-				break
-			}
+		for _, s := range sorted {
 			m := metas[s.idx]
-			topArticles = append(topArticles, trackerArticleRef{
+			eventArticles = append(eventArticles, trackerArticleRef{
 				ID:        m.id,
 				Title:     m.title,
 				SourceKey: m.sourceKey,
@@ -2649,7 +2646,7 @@ func clusterTrackerEvents(articles []model.Article, heatDiscovered map[string]st
 			Count:    len(members),
 			Momentum: detectMomentum(windowDelta, newCount),
 			Sources:  flattenTrackerSources(sourceCount),
-			Articles: topArticles,
+			Articles: eventArticles,
 		})
 	}
 
