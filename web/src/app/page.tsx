@@ -586,7 +586,7 @@ export default function Home() {
   // 话题追踪
   const [topics, setTopics] = useState<TrackerTopic[]>([]);
   const [events, setEvents] = useState<TrackerEventGroup[]>([]);
-  const [trackerWindow, setTrackerWindow] = useState(6);
+  const [trackerWindow, setTrackerWindow] = useState(3);
 
   // 热榜(专用接口,直接按 heat_value 排序,不受 published_at 分页影响)
   const [hotlist, setHotlist] = useState<HotlistResp>({ zhihu: [], baidu: [], weibo: [] });

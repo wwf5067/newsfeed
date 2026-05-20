@@ -709,15 +709,22 @@ func buildTrackerTopics(
 		accumulateTrackerTopics(accs, seen, article, deltaByID[article.ID], heatDiscovered)
 	}
 
+	// 短窗口(<=6h)容忍更低出现次数,突出"刚出现"的事件/实体。
+	minTopicCount := 2
+	broadGeoMinCount := 5
+	if windowHours <= 6 {
+		minTopicCount = 1
+		broadGeoMinCount = 2
+	}
+
 	items := make([]trackerTopic, 0, len(accs))
 	for _, acc := range accs {
 		// 超泛地名(中国/美国/欧洲 等)作为话题背景词出现频率极高,
 		// 需要更多文章支撑才能上榜,避免稀释真正的热点。
-		const broadGeoMinCount = 5
 		if _, isBroad := broadGeoEntities[acc.Label]; isBroad && acc.Count < broadGeoMinCount {
 			continue
 		}
-		if acc.Count < 2 {
+		if acc.Count < minTopicCount {
 			continue
 		}
 		// 以前用 acc.Score == 0 过滤,现在还按这个走,确保 entity 至少有热度数据
@@ -741,6 +748,12 @@ func buildTrackerTopics(
 	}
 
 	sort.Slice(items, func(i, j int) bool {
+		if windowHours <= 3 {
+			// 3h 强化"新鲜度":新进榜条目优先于历史延续条目。
+			if items[i].CountDelta != items[j].CountDelta {
+				return items[i].CountDelta > items[j].CountDelta
+			}
+		}
 		// momentum rank: up=0, flat=1, down=2 → 升温话题排前面
 		if items[i].Momentum != items[j].Momentum {
 			return trackerMomentumRank(items[i].Momentum) < trackerMomentumRank(items[j].Momentum)
@@ -2348,12 +2361,22 @@ func truncateTitleAtWordBoundary(title string, maxRunes int) string {
 // 传 nil 时退化为 "flat"。
 //
 // 性能: 对 500 篇文章 < 20ms(倒排索引避免 O(N²))。
-func clusterTrackerEvents(articles []model.Article, heatDiscovered map[string]struct{}, deltaByID map[int64]WindowDelta, limit int) []trackerEventGroup {
+func clusterTrackerEvents(articles []model.Article, heatDiscovered map[string]struct{}, deltaByID map[int64]WindowDelta, limit, windowHours int) []trackerEventGroup {
 	if len(articles) == 0 {
 		return nil
 	}
 	if limit <= 0 {
 		limit = 8
+	}
+
+	if windowHours <= 0 {
+		windowHours = 24
+	}
+	// 短窗口提升事件上限,避免首页事件区过空。
+	if windowHours <= 3 && limit < 12 {
+		limit = 12
+	} else if windowHours <= 6 && limit < 10 {
+		limit = 10
 	}
 
 	metas := make([]trackerEventArticleMeta, 0, len(articles))
@@ -2383,6 +2406,12 @@ func clusterTrackerEvents(articles []model.Article, heatDiscovered map[string]st
 
 	if len(metas) < 2 {
 		return nil
+	}
+
+	minEventCount := 2
+	if windowHours <= 6 {
+		// 3h/6h 允许单篇突发事件保留,增强新鲜度。
+		minEventCount = 1
 	}
 
 	// Step 2: 倒排索引 — entity + keyword 双信号连接。
@@ -2493,7 +2522,7 @@ func clusterTrackerEvents(articles []model.Article, heatDiscovered map[string]st
 	// Step 5: 构建事件组
 	events := make([]trackerEventGroup, 0, len(groups))
 	for _, members := range groups {
-		if len(members) < 2 {
+		if len(members) < minEventCount {
 			continue // 单篇文章不算事件
 		}
 
@@ -2501,7 +2530,7 @@ func clusterTrackerEvents(articles []model.Article, heatDiscovered map[string]st
 		// 例如百度热榜同一事件会出现两条极相似标题,这里折叠成 1 条。
 		// 去重后再参与 count/score/source/articles 统计,保证"计数和展示都按一条"。
 		members = deduplicateClusterMembersBySource(members, metas)
-		if len(members) < 2 {
+		if len(members) < minEventCount {
 			continue
 		}
 

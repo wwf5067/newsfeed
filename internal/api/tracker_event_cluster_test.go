@@ -33,7 +33,7 @@ func TestEventClustering(t *testing.T) {
 
 	// 先计算 heatDiscovered(和 buildTrackerTopics 一样)
 	heatDiscovered := collectHeatDiscoveredWords(articles)
-	events := clusterTrackerEvents(articles, heatDiscovered, nil, 10)
+	events := clusterTrackerEvents(articles, heatDiscovered, nil, 10, 24)
 
 	fmt.Println("========== 事件聚类结果 ==========")
 	fmt.Println()
@@ -121,7 +121,7 @@ func TestEventClustering_SourceDuplicateCollapse(t *testing.T) {
 	}
 
 	heatDiscovered := collectHeatDiscoveredWords(articles)
-	events := clusterTrackerEvents(articles, heatDiscovered, nil, 10)
+	events := clusterTrackerEvents(articles, heatDiscovered, nil, 10, 24)
 	if len(events) == 0 {
 		t.Fatalf("期望至少 1 个事件组,实际 0")
 	}

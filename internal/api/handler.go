@@ -225,7 +225,7 @@ func (h *Handler) ListTrackers(w http.ResponseWriter, r *http.Request) {
 	for _, d := range deltas {
 		deltaByID[d.ArticleID] = d
 	}
-	resp.Events = clusterTrackerEvents(articles, heatDiscovered, deltaByID, 8)
+	resp.Events = clusterTrackerEvents(articles, heatDiscovered, deltaByID, 8, window)
 
 	// 热度候选词持久化(异步,不阻塞响应):将发现的热词写入 DB,检查转正。
 	if len(heatDiscovered) > 0 {

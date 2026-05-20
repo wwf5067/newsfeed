@@ -66,15 +66,15 @@ function formatSignedHeat(v: number): string {
 // 用户共识:6h 看刚出热点,24h 看一日内,3天/7天 看周热度,30天 看长尾。
 // 90天/全部 在 30 天 retention 之外没有更多数据,且 30 天 = retention 上限本身就够了。
 const WINDOW_OPTIONS: { hours: number; label: string }[] = [
+  { hours: 3, label: "3 小时" },
   { hours: 6, label: "6 小时" },
   { hours: 24, label: "24 小时" },
   { hours: 72, label: "3 天" },
   { hours: 168, label: "7 天" },
   { hours: 720, label: "30 天" },
 ];
-// 默认 24 小时:从详情页 entity tag 跳过来时,既能看到当下热度变化,
-// 又有足够上下文(24h 范围内通常有 5+ 篇文章)。
-const DEFAULT_WINDOW = 24;
+// 默认 3 小时:优先展示最新事件和实体变化。
+const DEFAULT_WINDOW = 3;
 
 function windowLabel(hours: number): string {
   const opt = WINDOW_OPTIONS.find((o) => o.hours === hours);
