@@ -369,7 +369,7 @@ func (h *Handler) GetArticleKeywords(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	candidates := extractTrackerCandidates(*a)
+	candidates := extractTrackerCandidates(*a, nil)
 	// 优先 entity,再 keyword;最多返回 5 个
 	keywords := make([]string, 0, 5)
 	// 先挑 entity

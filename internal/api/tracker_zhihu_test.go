@@ -214,7 +214,7 @@ func TestExtractZhihuHotTitles(t *testing.T) {
 
 	for i, tc := range cases {
 		article := model.Article{Title: tc.title}
-		candidates := extractTrackerCandidates(article)
+		candidates := extractTrackerCandidates(article, nil)
 
 		// 收集实际结果
 		gotEntities := map[string]struct{}{}

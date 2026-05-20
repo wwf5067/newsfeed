@@ -97,7 +97,7 @@ func TestTrackerExtraction_ZhihuHot(t *testing.T) {
 
 	for i, title := range titles {
 		article := model.Article{ID: int64(i + 1), Title: title}
-		candidates := extractTrackerCandidates(article)
+		candidates := extractTrackerCandidates(article, nil)
 
 		entities := []string{}
 		keywords := []string{}

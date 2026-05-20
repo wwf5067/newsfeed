@@ -466,6 +466,91 @@ var (
 // 跨段比较时新文章进入会让 recent.Score > prev.Score 几乎稳定成立 → 全 up
 // 偏置。改用 snapshot 真实增量后,跟 storyline 端语义一致(都是 detectMomentum
 // 的 scoreDelta + newCount 模型),首页和实体页同一 term 不再矛盾。
+// collectHeatDiscoveredWords 跨文章词频统计,发现热点短词。
+//
+// 原理:如果一个 2-4 汉字的词出现在 ≥3 篇不同文章的标题中,说明它是当前热点话题词,
+// 即使不在词典/strongVerbs/strongTopicNouns 中也应该被保留。
+//
+// 使用轻量 normalize(不做 weak 过滤),否则短词在统计阶段就被消灭。
+// 安全防线:stopTokens 排除 + 词典已覆盖的排除 + 长度范围限制。
+//
+// 性能:O(N*M) N=文章数 M=平均标题词数,对 500 篇文章 < 50ms,无压力。
+func collectHeatDiscoveredWords(articles []model.Article) map[string]struct{} {
+	const (
+		minArticles = 3 // 至少出现在 3 篇不同文章中
+		minHanLen   = 2 // 最少 2 个汉字
+		maxHanLen   = 4 // 最多 4 个汉字(超过的已能被 looksLikeTopicPhrase 保留)
+	)
+
+	// word → 出现在哪些文章(按 article ID 去重)
+	wordArticles := make(map[string]map[int64]struct{})
+
+	for _, article := range articles {
+		title := strings.TrimSpace(article.Title)
+		if title == "" {
+			continue
+		}
+		// 用 gse 分词提取所有词
+		tokens := segmentTitle(title)
+		seen := make(map[string]struct{}) // 同一篇文章内去重
+		for _, tok := range tokens {
+			cleaned := normalizeLexiconAlias(tok)
+			if cleaned == "" || utf8.RuneCountInString(cleaned) < 2 {
+				continue
+			}
+			cleaned = canonicalizeTrackerToken(cleaned)
+			if cleaned == "" {
+				continue
+			}
+			// 长度范围过滤
+			hanLen := hanRuneCount(cleaned)
+			if hanLen < minHanLen || hanLen > maxHanLen {
+				continue
+			}
+			// 排除已在词典/白名单中的词(它们不需要被"发现")
+			if _, ok := trackerEntityLabelSet[cleaned]; ok {
+				continue
+			}
+			if _, ok := strongGeoNames[cleaned]; ok {
+				continue
+			}
+			if _, ok := strongVerbs[cleaned]; ok {
+				continue
+			}
+			if _, ok := strongTopicNouns[cleaned]; ok {
+				continue
+			}
+			// 排除 stopTokens
+			if _, ok := stopTokens[cleaned]; ok {
+				continue
+			}
+			// 排除纯数字/度量词
+			if isAllDigits(cleaned) || looksLikeNumericMeasure(cleaned) {
+				continue
+			}
+			// 同一篇文章内只计一次
+			if _, ok := seen[cleaned]; ok {
+				continue
+			}
+			seen[cleaned] = struct{}{}
+
+			if wordArticles[cleaned] == nil {
+				wordArticles[cleaned] = make(map[int64]struct{})
+			}
+			wordArticles[cleaned][article.ID] = struct{}{}
+		}
+	}
+
+	// 筛选满足阈值的词
+	result := make(map[string]struct{})
+	for word, articles := range wordArticles {
+		if len(articles) >= minArticles {
+			result[word] = struct{}{}
+		}
+	}
+	return result
+}
+
 func buildTrackerTopics(
 	articles []model.Article,
 	deltas []WindowDelta,
@@ -481,13 +566,14 @@ func buildTrackerTopics(
 		deltaByID[d.ArticleID] = d
 	}
 
+	// 热度反馈式实体发现:跨文章统计词频,高频出现的短词(不在词典中)自动升级为候选。
+	heatDiscovered := collectHeatDiscoveredWords(articles)
+
 	accs := map[string]*trackerAccumulator{}
 	seen := make(map[int64]map[string]struct{}, len(articles))
 
 	for _, article := range articles {
-		// deltaByID 找不到时返回零值 WindowDelta,Delta=0 IsNewInWindow=false,
-		// accumulator 内累加 0 不影响其它 acc 字段 — 安全降级。
-		accumulateTrackerTopics(accs, seen, article, deltaByID[article.ID])
+		accumulateTrackerTopics(accs, seen, article, deltaByID[article.ID], heatDiscovered)
 	}
 
 	items := make([]trackerTopic, 0, len(accs))
@@ -552,9 +638,10 @@ func accumulateTrackerTopics(
 	accs map[string]*trackerAccumulator,
 	articleSeen map[int64]map[string]struct{},
 	article model.Article,
-	delta WindowDelta, // 该文章在窗口内的真实热度增量;零值表示 snapshot 不可用
+	delta WindowDelta,
+	heatDiscovered map[string]struct{}, // 热度反馈发现的跨文章高频词
 ) {
-	candidates := extractTrackerCandidates(article)
+	candidates := extractTrackerCandidates(article, heatDiscovered)
 	if len(candidates) == 0 {
 		return
 	}
@@ -606,7 +693,7 @@ func accumulateTrackerTopics(
 	}
 }
 
-func extractTrackerCandidates(article model.Article) []trackerCandidate {
+func extractTrackerCandidates(article model.Article, heatDiscovered map[string]struct{}) []trackerCandidate {
 	title := strings.TrimSpace(article.Title)
 	if title == "" {
 		return nil
@@ -731,13 +818,19 @@ func extractTrackerCandidates(article model.Article) []trackerCandidate {
 	for _, tok := range gseTokens {
 		normalized := normalizeTrackerToken(tok)
 		if normalized == "" {
-			// 如果 normalizeTrackerToken 过滤了但该词是 repeated,尝试轻量 normalize 后放入 pool
+			// 如果 normalizeTrackerToken 过滤了但该词是 repeated 或 heatDiscovered,
+			// 尝试轻量 normalize 后放入 pool
 			cleaned := normalizeLexiconAlias(tok)
 			if cleaned == "" || utf8.RuneCountInString(cleaned) < 2 {
 				continue
 			}
 			cleaned = canonicalizeTrackerToken(cleaned)
-			if _, ok := repeatedTokens[cleaned]; ok && cleaned != "" {
+			if cleaned == "" {
+				continue
+			}
+			_, isRepeated := repeatedTokens[cleaned]
+			_, isHeatFound := heatDiscovered[cleaned]
+			if isRepeated || isHeatFound {
 				appendTrackerPool(&ordered, poolSeen, cleaned)
 			}
 			continue
@@ -778,14 +871,19 @@ func extractTrackerCandidates(article model.Article) []trackerCandidate {
 		_, forced := forcedEntities[label]
 		_, repeated := repeatedTokens[label]
 		_, isCompoundKw := compoundTopicKeywords[label]
+		_, heatFound := heatDiscovered[label]
 		// repeated: 标题中出现 ≥2 次的词,跳过大部分过滤但仍需排除 stopTokens。
 		// stopTokens 里的词(如"回应""发布")即使重复出现也不应该当关键词。
 		if repeated && isGenericRoleToken(label) {
 			repeated = false
 		}
+		// heatDiscovered: 跨文章高频词,同样需要排除 stopTokens。
+		if heatFound && isGenericRoleToken(label) {
+			heatFound = false
+		}
 		// compoundTopicKeywords 是人工精选的高价值复合词(如"贸易谈判""全球升温"),
 		// 已在 0.6 步显式扫描注入,不再经过 shouldKeepTrackerToken 过滤。
-		if !forced && !repeated && !isCompoundKw && !shouldKeepTrackerToken(label) {
+		if !forced && !repeated && !isCompoundKw && !heatFound && !shouldKeepTrackerToken(label) {
 			continue
 		}
 		kind := "keyword"

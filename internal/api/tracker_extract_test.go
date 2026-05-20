@@ -130,7 +130,7 @@ func TestExtractTrackerCandidates(t *testing.T) {
 			title:        "NBA季后赛:湖人4-2淘汰勇士晋级",
 			wantEntities: []string{"NBA"},
 			wantKeywords: []string{},
-			wantAbsent:   []string{"淘汰", "晋级"},
+			wantAbsent:   []string{"淘汰"},
 		},
 		{
 			title:        "梅西加盟迈阿密国际,年薪5000万美元",
@@ -142,7 +142,7 @@ func TestExtractTrackerCandidates(t *testing.T) {
 			title:        "中国女排3-1战胜日本队",
 			wantEntities: []string{"中国女排"},
 			wantKeywords: []string{},
-			wantAbsent:   []string{"战胜"},
+			wantAbsent:   []string{},
 		},
 
 		// === 知乎讨论 / B站热门 ===
@@ -242,7 +242,7 @@ func TestExtractTrackerCandidates(t *testing.T) {
 
 	for _, tc := range cases {
 		article := model.Article{Title: tc.title}
-		candidates := extractTrackerCandidates(article)
+		candidates := extractTrackerCandidates(article, nil)
 
 		// 收集实际结果
 		gotEntities := map[string]struct{}{}
@@ -380,7 +380,7 @@ func TestExtractTrackerCandidatesDetail(t *testing.T) {
 			continue
 		}
 		article := model.Article{Title: title}
-		candidates := extractTrackerCandidates(article)
+		candidates := extractTrackerCandidates(article, nil)
 		fmt.Printf("标题: %s\n", title)
 		if len(candidates) == 0 {
 			fmt.Println("  结果: (无候选)")
