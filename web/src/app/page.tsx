@@ -919,8 +919,6 @@ export default function Home() {
               </div>
             </div>
           )}
-            </div>
-          )}
           {(hotlist.zhihu.length > 0 || hotlist.baidu.length > 0 || hotlist.weibo.length > 0) && (
             <>
               {grouped.length > 0 && (
