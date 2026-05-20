@@ -709,22 +709,15 @@ func buildTrackerTopics(
 		accumulateTrackerTopics(accs, seen, article, deltaByID[article.ID], heatDiscovered)
 	}
 
-	// 短窗口(<=6h)容忍更低出现次数,突出"刚出现"的事件/实体。
-	minTopicCount := 2
-	broadGeoMinCount := 5
-	if windowHours <= 6 {
-		minTopicCount = 1
-		broadGeoMinCount = 2
-	}
-
 	items := make([]trackerTopic, 0, len(accs))
 	for _, acc := range accs {
 		// 超泛地名(中国/美国/欧洲 等)作为话题背景词出现频率极高,
 		// 需要更多文章支撑才能上榜,避免稀释真正的热点。
+		const broadGeoMinCount = 5
 		if _, isBroad := broadGeoEntities[acc.Label]; isBroad && acc.Count < broadGeoMinCount {
 			continue
 		}
-		if acc.Count < minTopicCount {
+		if acc.Count < 2 {
 			continue
 		}
 		// 以前用 acc.Score == 0 过滤,现在还按这个走,确保 entity 至少有热度数据
@@ -748,12 +741,6 @@ func buildTrackerTopics(
 	}
 
 	sort.Slice(items, func(i, j int) bool {
-		if windowHours <= 3 {
-			// 3h 强化"新鲜度":新进榜条目优先于历史延续条目。
-			if items[i].CountDelta != items[j].CountDelta {
-				return items[i].CountDelta > items[j].CountDelta
-			}
-		}
 		// momentum rank: up=0, flat=1, down=2 → 升温话题排前面
 		if items[i].Momentum != items[j].Momentum {
 			return trackerMomentumRank(items[i].Momentum) < trackerMomentumRank(items[j].Momentum)
@@ -2352,8 +2339,8 @@ func truncateTitleAtWordBoundary(title string, maxRunes int) string {
 //
 // 算法:
 //  1. 为每篇文章提取实体/关键词集合(复用 extractTrackerCandidates)
-//  2. 用倒排索引(仅 entity → articleIDs,关键词不作为连接器)找共现文章对
-//  3. 共享 ≥2 个实体的文章用 Union-Find 合并为同一组
+//  2. 先按 entity 倒排索引找候选文章对,仅保留"共享非 hub 实体"的 pair
+//  3. 对候选 pair 计算标题向量余弦相似度,达到阈值才 Union-Find 合并
 //  4. 每组选最高热度文章标题为代表,聚合实体/关键词/来源
 //  5. 只保留 count≥2 的组(单篇文章不算事件),按 score 降序
 //
@@ -2361,22 +2348,12 @@ func truncateTitleAtWordBoundary(title string, maxRunes int) string {
 // 传 nil 时退化为 "flat"。
 //
 // 性能: 对 500 篇文章 < 20ms(倒排索引避免 O(N²))。
-func clusterTrackerEvents(articles []model.Article, heatDiscovered map[string]struct{}, deltaByID map[int64]WindowDelta, limit, windowHours int) []trackerEventGroup {
+func clusterTrackerEvents(articles []model.Article, heatDiscovered map[string]struct{}, deltaByID map[int64]WindowDelta, limit int) []trackerEventGroup {
 	if len(articles) == 0 {
 		return nil
 	}
 	if limit <= 0 {
 		limit = 8
-	}
-
-	if windowHours <= 0 {
-		windowHours = 24
-	}
-	// 短窗口提升事件上限,避免首页事件区过空。
-	if windowHours <= 3 && limit < 12 {
-		limit = 12
-	} else if windowHours <= 6 && limit < 10 {
-		limit = 10
 	}
 
 	metas := make([]trackerEventArticleMeta, 0, len(articles))
@@ -2408,27 +2385,12 @@ func clusterTrackerEvents(articles []model.Article, heatDiscovered map[string]st
 		return nil
 	}
 
-	minEventCount := 2
-	if windowHours <= 6 {
-		// 3h/6h 允许单篇突发事件保留,增强新鲜度。
-		minEventCount = 1
-	}
-
-	// Step 2: 倒排索引 — entity + keyword 双信号连接。
-	// 连接条件:同一对文章必须同时满足
-	//  1) 共享至少 1 个非 hub 实体
-	//  2) 共享至少 1 个有效关键词
-	// 这样能显著减少仅靠地名/国家名导致的误聚类。
+	// Step 2: 倒排索引 — 先按 entity 找候选 pair。
+	// "有效关键词连接器"机制先废弃,仅保留 non-hub entity + 标题向量相似度。
 	entityToArticles := make(map[string][]int)
-	keywordToArticles := make(map[string][]int)
 	for i, meta := range metas {
 		for _, e := range meta.entities {
 			entityToArticles[e] = append(entityToArticles[e], i)
-		}
-		for _, k := range meta.keywords {
-			if shouldUseKeywordAsClusterConnector(k) {
-				keywordToArticles[k] = append(keywordToArticles[k], i)
-			}
 		}
 	}
 
@@ -2461,11 +2423,14 @@ func clusterTrackerEvents(articles []model.Article, heatDiscovered map[string]st
 		"AI": {},
 	}
 
-	type clusterPairSignal struct {
-		hasEntity bool
-		hasKeyword bool
+	const titleCosineThreshold = 0.16
+	const titleCosineSparseResidualThreshold = 0.06
+	const titleCosineRawFallbackThreshold = 0.20
+	titleVectors := make([]map[string]float64, len(metas))
+	for i, m := range metas {
+		titleVectors[i] = buildTitleTermVector(m.title)
 	}
-	pairSignals := make(map[[2]int]clusterPairSignal)
+	pairSharedEntities := make(map[[2]int]map[string]struct{})
 
 	for label, idxList := range entityToArticles {
 		if _, isHub := hubEntities[label]; isHub {
@@ -2481,34 +2446,29 @@ func clusterTrackerEvents(articles []model.Article, heatDiscovered map[string]st
 					a, b = b, a
 				}
 				key := [2]int{a, b}
-				s := pairSignals[key]
-				s.hasEntity = true
-				pairSignals[key] = s
+				if pairSharedEntities[key] == nil {
+					pairSharedEntities[key] = make(map[string]struct{})
+				}
+				pairSharedEntities[key][label] = struct{}{}
 			}
 		}
 	}
 
-	for _, idxList := range keywordToArticles {
-		if len(idxList) < 2 {
+	for key, shared := range pairSharedEntities {
+		a, b := key[0], key[1]
+		scoreRaw := cosineSimilarity(titleVectors[a], titleVectors[b])
+		if hasSparseResidualSignal(titleVectors[a], titleVectors[b], shared) {
+			// 去除共享实体与停用词后,若剩余有效词过少,
+			// 优先使用 raw 相似度,避免排除词后向量几乎为空导致漏合并。
+			if scoreRaw >= titleCosineSparseResidualThreshold {
+				union(a, b)
+			}
 			continue
 		}
-		for x := 0; x < len(idxList); x++ {
-			for y := x + 1; y < len(idxList); y++ {
-				a, b := idxList[x], idxList[y]
-				if a > b {
-					a, b = b, a
-				}
-				key := [2]int{a, b}
-				s := pairSignals[key]
-				s.hasKeyword = true
-				pairSignals[key] = s
-			}
-		}
-	}
 
-	for key, s := range pairSignals {
-		if s.hasEntity && s.hasKeyword {
-			union(key[0], key[1])
+		scoreExcluded := cosineSimilarityExcludeTerms(titleVectors[a], titleVectors[b], shared)
+		if scoreExcluded >= titleCosineThreshold || scoreRaw >= titleCosineRawFallbackThreshold {
+			union(a, b)
 		}
 	}
 
@@ -2522,6 +2482,7 @@ func clusterTrackerEvents(articles []model.Article, heatDiscovered map[string]st
 	// Step 5: 构建事件组
 	events := make([]trackerEventGroup, 0, len(groups))
 	for _, members := range groups {
+		minEventCount := 2
 		if len(members) < minEventCount {
 			continue // 单篇文章不算事件
 		}
@@ -2670,6 +2631,161 @@ func deduplicateClusterMembersBySource(members []int, metas []trackerEventArticl
 		keptBySource[m.sourceKey] = append(keptBySource[m.sourceKey], idx)
 	}
 	return kept
+}
+
+// buildTitleTermVector 构建标题的稀疏 term 向量(TF,未做 IDF)。
+// token 来源优先 segmentTitle,失败回退正则切词。
+func buildTitleTermVector(title string) map[string]float64 {
+	vec := make(map[string]float64)
+	tokens := segmentTitle(title)
+	if len(tokens) == 0 {
+		tokens = trackerTokenRegex.FindAllString(title, -1)
+	}
+	total := 0.0
+	for _, tok := range tokens {
+		n := normalizeTrackerToken(tok)
+		if n == "" {
+			n = normalizeLexiconAlias(tok)
+		}
+		n = canonicalizeTrackerToken(n)
+		if n == "" || utf8.RuneCountInString(n) < 2 {
+			continue
+		}
+		if isClusterSimilarityStopword(n) {
+			continue
+		}
+		if isGenericRoleToken(n) {
+			continue
+		}
+		vec[n] += 1
+		total += 1
+	}
+	// 标题长度归一化:使用 TF(词频/标题有效 token 数),降低长标题天然高重叠带来的偏置。
+	if total > 0 {
+		for k, v := range vec {
+			vec[k] = v / total
+		}
+	}
+	return vec
+}
+
+func isClusterSimilarityStopword(token string) bool {
+	_, ok := clusterSimilarityStopwords[token]
+	return ok
+}
+
+var clusterSimilarityStopwords = map[string]struct{}{
+	"消息": {},
+	"回应": {},
+	"表示": {},
+	"公布": {},
+	"发布": {},
+	"宣布": {},
+	"称":  {},
+	"进行": {},
+	"相关": {},
+	"最新": {},
+	"今天": {},
+	"今日": {},
+}
+
+func hasSparseResidualSignal(a, b map[string]float64, excluded map[string]struct{}) bool {
+	const minResidualTerms = 1
+	return residualTermCount(a, excluded) <= minResidualTerms || residualTermCount(b, excluded) <= minResidualTerms
+}
+
+func residualTermCount(vec map[string]float64, excluded map[string]struct{}) int {
+	count := 0
+	for k := range vec {
+		if _, skip := excluded[k]; skip {
+			continue
+		}
+		count++
+	}
+	return count
+}
+
+// cosineSimilarity 计算两个稀疏向量的余弦相似度。
+func cosineSimilarity(a, b map[string]float64) float64 {
+	if len(a) == 0 || len(b) == 0 {
+		return 0
+	}
+	dot := 0.0
+	normA := 0.0
+	normB := 0.0
+	for _, v := range a {
+		normA += v * v
+	}
+	for _, v := range b {
+		normB += v * v
+	}
+	if normA == 0 || normB == 0 {
+		return 0
+	}
+	// 遍历更小 map 降低开销
+	small, large := a, b
+	if len(small) > len(large) {
+		small, large = large, small
+	}
+	for k, v := range small {
+		if ov, ok := large[k]; ok {
+			dot += v * ov
+		}
+	}
+	return dot / (sqrt(normA) * sqrt(normB))
+}
+
+// cosineSimilarityExcludeTerms 计算余弦相似度,但忽略指定 term(如两篇共享实体)。
+func cosineSimilarityExcludeTerms(a, b map[string]float64, excluded map[string]struct{}) float64 {
+	if len(a) == 0 || len(b) == 0 {
+		return 0
+	}
+	dot := 0.0
+	normA := 0.0
+	normB := 0.0
+	for k, v := range a {
+		if _, skip := excluded[k]; skip {
+			continue
+		}
+		normA += v * v
+	}
+	for k, v := range b {
+		if _, skip := excluded[k]; skip {
+			continue
+		}
+		normB += v * v
+	}
+	if normA == 0 || normB == 0 {
+		return 0
+	}
+	small, large := a, b
+	if len(small) > len(large) {
+		small, large = large, small
+	}
+	for k, v := range small {
+		if _, skip := excluded[k]; skip {
+			continue
+		}
+		if ov, ok := large[k]; ok {
+			if _, skip2 := excluded[k]; skip2 {
+				continue
+			}
+			dot += v * ov
+		}
+	}
+	return dot / (sqrt(normA) * sqrt(normB))
+}
+
+func sqrt(v float64) float64 {
+	if v <= 0 {
+		return 0
+	}
+	// 牛顿迭代,避免引入 math 包外依赖变化
+	x := v
+	for i := 0; i < 8; i++ {
+		x = 0.5 * (x + v/x)
+	}
+	return x
 }
 
 // isNearDuplicateTitle 判定两个标题是否属于"近重复"。
