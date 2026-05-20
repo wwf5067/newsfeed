@@ -304,9 +304,9 @@ var trackerEntityLexicon = []trackerLexiconEntry{
 	{Label: "万圣节", Category: "event", Aliases: []string{"万圣节"}},
 	{Label: "高考", Category: "event", Aliases: []string{"高考"}},
 	{Label: "考研", Category: "event", Aliases: []string{"考研"}},
-	{Label: "春节", Category: "event", Aliases: []string{"春节", "过年"}},
+	{Label: "春节", Category: "event", Aliases: []string{"春节", "过年", "除夕", "年三十", "春运"}},
 	{Label: "春晚", Category: "event", Aliases: []string{"春晚", "央视春晚"}},
-	{Label: "国庆", Category: "event", Aliases: []string{"国庆", "国庆节"}},
+	{Label: "国庆", Category: "event", Aliases: []string{"国庆", "国庆节", "十一", "十一黄金周"}},
 	{Label: "WAIC", Category: "event", Aliases: []string{"WAIC", "waic", "世界人工智能大会"}},
 
 	// === 体育赛事(青年/U系列) ===
