@@ -108,12 +108,13 @@ type trackerLexiconAlias struct {
 }
 
 type trackerEventArticleMeta struct {
-	id        int64
-	title     string
-	sourceKey string
-	heatValue int64
-	entities  []string
-	keywords  []string
+	id          int64
+	title       string
+	sourceKey   string
+	heatValue   int64
+	publishedAt time.Time
+	entities    []string
+	keywords    []string
 }
 
 var (
@@ -552,7 +553,7 @@ func collectHeatDiscoveredWords(articles []model.Article) map[string]struct{} {
 			normalized[i] = canonicalizeTrackerToken(cleaned)
 		}
 
-		seen := make(map[string]struct{})      // 同一篇文章内去重(unigram)
+		seen := make(map[string]struct{})       // 同一篇文章内去重(unigram)
 		seenBigram := make(map[string]struct{}) // 同一篇文章内去重(bigram)
 
 		for i, cleaned := range normalized {
@@ -2252,9 +2253,9 @@ func scoreArticle(article model.Article) int64 {
 // 来源越多样,分数越高,让跨平台共振事件优先级更高。
 //
 // 系数设计(离散阶梯,便于调参):
-//  - 1 个来源: 1.00x
-//  - 2 个来源: 2.00x
-//  - >=3 个来源: 4.00x
+//   - 1 个来源: 1.00x
+//   - 2 个来源: 2.00x
+//   - >=3 个来源: 4.00x
 func applySourceDiversityBoost(base int64, distinctSources int) int64 {
 	if base <= 0 {
 		return base
@@ -2365,10 +2366,11 @@ func clusterTrackerEvents(articles []model.Article, heatDiscovered map[string]st
 			continue
 		}
 		meta := trackerEventArticleMeta{
-			id:        a.ID,
-			title:     a.Title,
-			sourceKey: a.SourceKey,
-			heatValue: a.HeatValue,
+			id:          a.ID,
+			title:       a.Title,
+			sourceKey:   a.SourceKey,
+			heatValue:   a.HeatValue,
+			publishedAt: a.PublishedAt,
 		}
 		for _, c := range candidates {
 			if c.Kind == "entity" {
@@ -2385,12 +2387,18 @@ func clusterTrackerEvents(articles []model.Article, heatDiscovered map[string]st
 		return nil
 	}
 
-	// Step 2: 倒排索引 — 先按 entity 找候选 pair。
-	// "有效关键词连接器"机制先废弃,仅保留 non-hub entity + 标题向量相似度。
+	// Step 2: 倒排索引召回候选 pair。
+	// 仅在"共享非 hub 实体"或"共享高置信关键词"下生成候选,避免全量 O(N²)。
 	entityToArticles := make(map[string][]int)
+	keywordToArticles := make(map[string][]int)
 	for i, meta := range metas {
 		for _, e := range meta.entities {
 			entityToArticles[e] = append(entityToArticles[e], i)
+		}
+		for _, k := range meta.keywords {
+			if shouldUseKeywordAsClusterConnector(k) {
+				keywordToArticles[k] = append(keywordToArticles[k], i)
+			}
 		}
 	}
 
@@ -2426,11 +2434,38 @@ func clusterTrackerEvents(articles []model.Article, heatDiscovered map[string]st
 	const titleCosineThreshold = 0.16
 	const titleCosineSparseResidualThreshold = 0.06
 	const titleCosineRawFallbackThreshold = 0.20
+	const pairLinkThreshold = 0.42
+	const wEntity = 0.35
+	const wTitle = 0.35
+	const wKeyword = 0.15
+	const wTime = 0.10
+	const wSourceDiversity = 0.05
+
 	titleVectors := make([]map[string]float64, len(metas))
 	for i, m := range metas {
 		titleVectors[i] = buildTitleTermVector(m.title)
 	}
-	pairSharedEntities := make(map[[2]int]map[string]struct{})
+
+	type pairSignal struct {
+		entities map[string]struct{}
+		keywords map[string]struct{}
+	}
+	pairSignals := make(map[[2]int]*pairSignal)
+	getPairSignal := func(a, b int) *pairSignal {
+		if a > b {
+			a, b = b, a
+		}
+		key := [2]int{a, b}
+		s, ok := pairSignals[key]
+		if !ok {
+			s = &pairSignal{
+				entities: make(map[string]struct{}),
+				keywords: make(map[string]struct{}),
+			}
+			pairSignals[key] = s
+		}
+		return s
+	}
 
 	for label, idxList := range entityToArticles {
 		if _, isHub := hubEntities[label]; isHub {
@@ -2442,32 +2477,65 @@ func clusterTrackerEvents(articles []model.Article, heatDiscovered map[string]st
 		for x := 0; x < len(idxList); x++ {
 			for y := x + 1; y < len(idxList); y++ {
 				a, b := idxList[x], idxList[y]
-				if a > b {
-					a, b = b, a
-				}
-				key := [2]int{a, b}
-				if pairSharedEntities[key] == nil {
-					pairSharedEntities[key] = make(map[string]struct{})
-				}
-				pairSharedEntities[key][label] = struct{}{}
+				s := getPairSignal(a, b)
+				s.entities[label] = struct{}{}
 			}
 		}
 	}
 
-	for key, shared := range pairSharedEntities {
+	for keyword, idxList := range keywordToArticles {
+		if len(idxList) < 2 {
+			continue
+		}
+		for x := 0; x < len(idxList); x++ {
+			for y := x + 1; y < len(idxList); y++ {
+				a, b := idxList[x], idxList[y]
+				s := getPairSignal(a, b)
+				s.keywords[keyword] = struct{}{}
+			}
+		}
+	}
+
+	for key, signal := range pairSignals {
 		a, b := key[0], key[1]
 		scoreRaw := cosineSimilarity(titleVectors[a], titleVectors[b])
-		if hasSparseResidualSignal(titleVectors[a], titleVectors[b], shared) {
+		titleSemantic := scoreRaw
+		if hasSparseResidualSignal(titleVectors[a], titleVectors[b], signal.entities) {
 			// 去除共享实体与停用词后,若剩余有效词过少,
 			// 优先使用 raw 相似度,避免排除词后向量几乎为空导致漏合并。
-			if scoreRaw >= titleCosineSparseResidualThreshold {
-				union(a, b)
+			titleSemantic = scoreRaw
+		} else {
+			scoreExcluded := cosineSimilarityExcludeTerms(titleVectors[a], titleVectors[b], signal.entities)
+			titleSemantic = scoreExcluded
+			if scoreRaw >= titleCosineRawFallbackThreshold {
+				titleSemantic = scoreRaw
 			}
+		}
+
+		entityOverlap := overlapRatio(signal.entities, 2)
+		keywordOverlap := overlapRatio(signal.keywords, 2)
+		timeProximity := timeProximityScore(metas[a].publishedAt, metas[b].publishedAt)
+		sourceDiversity := 0.0
+		if metas[a].sourceKey != metas[b].sourceKey {
+			sourceDiversity = 1.0
+		}
+
+		pairScore := wEntity*entityOverlap +
+			wTitle*titleSemantic +
+			wKeyword*keywordOverlap +
+			wTime*timeProximity +
+			wSourceDiversity*sourceDiversity
+
+		// keyword 不是硬门槛,但在无实体时仍需足够标题语义支撑,避免泛词误连。
+		if len(signal.entities) == 0 && titleSemantic < titleCosineThreshold {
 			continue
 		}
 
-		scoreExcluded := cosineSimilarityExcludeTerms(titleVectors[a], titleVectors[b], shared)
-		if scoreExcluded >= titleCosineThreshold || scoreRaw >= titleCosineRawFallbackThreshold {
+		if pairScore >= pairLinkThreshold {
+			// 低信息残量场景也保持一个最小语义底线。
+			if titleSemantic < titleCosineSparseResidualThreshold {
+				continue
+			}
 			union(a, b)
 		}
 	}
@@ -2705,6 +2773,44 @@ func residualTermCount(vec map[string]float64, excluded map[string]struct{}) int
 	return count
 }
 
+func overlapRatio(shared map[string]struct{}, saturateAt int) float64 {
+	if len(shared) == 0 {
+		return 0
+	}
+	if saturateAt <= 1 {
+		return 1
+	}
+	if len(shared) >= saturateAt {
+		return 1
+	}
+	return float64(len(shared)) / float64(saturateAt)
+}
+
+func timeProximityScore(a, b time.Time) float64 {
+	if a.IsZero() || b.IsZero() {
+		return 0.5
+	}
+	delta := a.Sub(b)
+	if delta < 0 {
+		delta = -delta
+	}
+	h := delta.Hours()
+	switch {
+	case h <= 1:
+		return 1.0
+	case h <= 3:
+		return 0.8
+	case h <= 6:
+		return 0.6
+	case h <= 12:
+		return 0.4
+	case h <= 24:
+		return 0.2
+	default:
+		return 0.05
+	}
+}
+
 // cosineSimilarity 计算两个稀疏向量的余弦相似度。
 func cosineSimilarity(a, b map[string]float64) float64 {
 	if len(a) == 0 || len(b) == 0 {
@@ -2790,8 +2896,8 @@ func sqrt(v float64) float64 {
 
 // isNearDuplicateTitle 判定两个标题是否属于"近重复"。
 // 规则:
-//  1) 标点/空白归一化后完全一致
-//  2) token 集合重叠比例高(overlap/min(lenA,lenB) >= 0.75 且 overlap>=2)
+//  1. 标点/空白归一化后完全一致
+//  2. token 集合重叠比例高(overlap/min(lenA,lenB) >= 0.75 且 overlap>=2)
 func isNearDuplicateTitle(a, b string) bool {
 	aNorm := normalizeTitleForClusterDedup(a)
 	bNorm := normalizeTitleForClusterDedup(b)
