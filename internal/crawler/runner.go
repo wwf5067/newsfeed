@@ -326,6 +326,14 @@ var sourceMetricNoun = map[string]string{
 	"weibo_hot":        "最热",
 }
 
+// sourceIcons 不同源在公告栏中的前缀图标,让每行一眼可辨来源。
+var sourceIcons = map[string]string{
+	"zhihu_hot":        "🔥",
+	"bilibili_popular": "▶️",
+	"baidu_hot":        "🔍",
+	"weibo_hot":        "📢",
+}
+
 // summaryExcludedSources 列出不在公告摘要里展示的数据源。
 // B 站内容以娱乐视频为主,与新闻聚合场景不符,从公告中移除。
 var summaryExcludedSources = map[string]bool{
@@ -333,6 +341,13 @@ var summaryExcludedSources = map[string]bool{
 }
 
 // buildSummaryContent 拼装摘要文本。stats 为空返回空串,调用方负责跳过。
+// 每个源独立一行展示,格式:
+//
+//	📊 今日 60 条 (知乎 30 / B 站 20 / 微博 10)
+//	🔥 知乎最热「普京访华」571 万
+//	▶ B 站最高「...」320 万播放
+//	📢 微博最热「豆包崩了」195 万
+//
 // summaryExcludedSources 里的源会从总数统计和 Top1 展示中排除。
 func buildSummaryContent(stats []SourceStat) string {
 	if len(stats) == 0 {
@@ -355,8 +370,9 @@ func buildSummaryContent(stats []SourceStat) string {
 		total += s.Count
 	}
 
-	// 头部:总数 + 各源细分(按 stats 顺序,即 count 降序)
-	parts := []string{fmt.Sprintf("📊 今日 %d 条", total)}
+	// 第一行:总数 + 各源细分
+	lines := make([]string, 0, len(filtered)+1)
+	header := fmt.Sprintf("📊 今日 %d 条", total)
 	if len(filtered) > 1 {
 		breakdown := make([]string, 0, len(filtered))
 		for _, s := range filtered {
@@ -366,10 +382,11 @@ func buildSummaryContent(stats []SourceStat) string {
 			}
 			breakdown = append(breakdown, fmt.Sprintf("%s %d", label, s.Count))
 		}
-		parts[0] += " (" + strings.Join(breakdown, " / ") + ")"
+		header += " (" + strings.Join(breakdown, " / ") + ")"
 	}
+	lines = append(lines, header)
 
-	// 每个源的 Top1
+	// 每个源的 Top1 独立一行
 	for _, s := range filtered {
 		if s.TopTitle == "" {
 			continue
@@ -378,19 +395,23 @@ func buildSummaryContent(stats []SourceStat) string {
 		if label == "" {
 			label = s.SourceKey
 		}
+		icon := sourceIcons[s.SourceKey]
+		if icon == "" {
+			icon = "📰"
+		}
 		metric := sourceMetricNoun[s.SourceKey]
 		if metric == "" {
 			metric = "最热"
 		}
 		title := truncateRunes(s.TopTitle, 22)
-		seg := fmt.Sprintf("%s%s「%s」", label, metric, title)
+		line := fmt.Sprintf("%s %s%s「%s」", icon, label, metric, title)
 		if s.TopHeat != "" {
-			seg += " " + s.TopHeat
+			line += " " + s.TopHeat
 		}
-		parts = append(parts, seg)
+		lines = append(lines, line)
 	}
 
-	return strings.Join(parts, " · ")
+	return strings.Join(lines, "\n")
 }
 
 // truncateRunes 按 rune 数截断,超出补省略号。中英文都按 1 算长度。
