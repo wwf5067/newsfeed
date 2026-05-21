@@ -650,6 +650,9 @@ func (h *Handler) DeleteHeatWord(w http.ResponseWriter, r *http.Request) {
 	// 更新内存黑名单
 	AddToHeatBlacklist(word)
 
+	// 同步清除运行时词典(立即生效,不等重启)
+	RemovePromotedWord(word)
+
 	// 清除 tracker 缓存,下次请求重算
 	h.trackerMu.Lock()
 	h.trackerCache = map[trackerCacheKey]trackerCacheEntry{}

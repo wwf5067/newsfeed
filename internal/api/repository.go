@@ -688,11 +688,18 @@ func (r *Repository) PromoteCandidates(ctx context.Context, minDays, minHits int
 	return out, rows.Err()
 }
 
-// AddHeatBlacklist 将词加入热词黑名单。
+// AddHeatBlacklist 将词加入热词黑名单,同时取消转正状态防止重启复活。
 func (r *Repository) AddHeatBlacklist(ctx context.Context, word string) error {
 	_, err := r.pool.Exec(ctx, `
 		INSERT INTO heat_blacklist (word) VALUES ($1)
 		ON CONFLICT (word) DO NOTHING
+	`, word)
+	if err != nil {
+		return err
+	}
+	// 清除 promoted_at,使 ListPromotedCandidates 在重启时不再加载该词
+	_, err = r.pool.Exec(ctx, `
+		UPDATE heat_candidates SET promoted_at = NULL WHERE word = $1
 	`, word)
 	return err
 }

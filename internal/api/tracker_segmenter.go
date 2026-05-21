@@ -126,3 +126,13 @@ func InjectPromotedWords(candidates []HeatCandidate) {
 			"count", len(candidates))
 	}
 }
+
+// RemovePromotedWord 从运行时词典中移除已转正的热词,用于黑名单删除时立即生效。
+// 注意: gse 不支持动态删词,分词器可能仍会切出该词;但移除 trackerEntityLabelSet
+// 后 shouldKeepTrackerToken 不再保留它,移除 promotedWordSet 后 IsPromotedWord
+// 返回 false,不再参与权重加成。重启后 AddHeatBlacklist 已清除 promoted_at,
+// ListPromotedCandidates 不会重新加载该词。
+func RemovePromotedWord(word string) {
+	delete(promotedWordSet, word)
+	delete(trackerEntityLabelSet, word)
+}
