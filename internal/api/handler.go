@@ -192,7 +192,14 @@ func (h *Handler) ListTrackers(w http.ResponseWriter, r *http.Request) {
 
 	// 拉窗口期内的文章。旧版拉 window*2 是为了 buildTrackerTopics 的 prev 段对比,
 	// 现在改用 snapshot 真实增量,不再需要 prev 段,只拉 window 即可。
-	articles, err := h.repo.ListRecentArticles(r.Context(), window, 500)
+	// 文章池大小随窗口自适应:72h 事件更分散,需要更大样本覆盖。
+	articleLimit := 500
+	if window >= 72 {
+		articleLimit = 800
+	} else if window <= 3 {
+		articleLimit = 300
+	}
+	articles, err := h.repo.ListRecentArticles(r.Context(), window, articleLimit)
 	if err != nil {
 		h.logger.Error("list trackers", "err", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})

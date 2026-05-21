@@ -998,13 +998,25 @@ func extractTrackerCandidates(article model.Article, heatDiscovered map[string]s
 		_, repeated := repeatedTokens[label]
 		_, isCompoundKw := compoundTopicKeywords[label]
 		_, heatFound := heatDiscovered[label]
-		// repeated: 标题中出现 ≥2 次的词,跳过大部分过滤但仍需排除 stopTokens。
+		// repeated: 标题中出现 ≥2 次的词,跳过大部分过滤但仍需排除 stopTokens 和噪声形态。
 		// stopTokens 里的词(如"回应""发布")即使重复出现也不应该当关键词。
+		// 纯数字("78")和弱碎片("半斤")重复出现同样无价值。
 		if repeated && isGenericRoleToken(label) {
 			repeated = false
 		}
-		// heatDiscovered: 跨文章高频词,同样需要排除 stopTokens。
+		if repeated && (isAllDigits(label) || isWeakChineseFragment(label) || looksLikeNumericMeasure(label)) {
+			repeated = false
+		}
+		// heatDiscovered: 跨文章高频词。isWeakChineseFragment 不在 isExcludedHeatWord 里检查
+		// (避免阻断"红包""油柑"这类有价值的 2-3 字热词被发现),但在消费时过滤。
+		// looksLikeNumericMeasure 已在 isExcludedHeatWord 里检查,这里是双重保险。
 		if heatFound && isGenericRoleToken(label) {
+			heatFound = false
+		}
+		// heatFound 路径:跨文章高频就是信号,不用 isWeakChineseFragment 过滤
+		// (短词如"红包""油柑"一旦多文章命中就有话题价值)。
+		// 但仍过滤纯数字和量词短语(这类无论多频繁都无追踪意义)。
+		if heatFound && (isAllDigits(label) || looksLikeNumericMeasure(label)) {
 			heatFound = false
 		}
 		// compoundTopicKeywords 是人工精选的高价值复合词(如"贸易谈判""全球升温"),
@@ -1560,23 +1572,43 @@ func looksLikeNumericMeasure(token string) bool {
 	if len(runes) < 2 {
 		return false
 	}
+
+	// 路径 A:阿拉伯数字主导的量词短语 —— 原有逻辑
+	// 要求:至少一半字符是 ASCII 数字,且以计量单位结尾。
 	digits := 0
 	for _, r := range runes {
 		if unicode.IsDigit(r) {
 			digits++
 		}
 	}
-	if digits == 0 {
-		return false
-	}
-	if digits*2 < len(runes) {
-		return false
-	}
-	for _, suffix := range []string{"人", "名", "例", "岁", "年", "天", "家", "次", "%", "万", "亿", "元", "斤", "公里", "小时"} {
-		if strings.HasSuffix(token, suffix) {
-			return true
+	if digits > 0 && digits*2 >= len(runes) {
+		for _, suffix := range []string{"人", "名", "例", "岁", "年", "天", "家", "次", "%", "万", "亿", "元", "斤", "公里", "小时"} {
+			if strings.HasSuffix(token, suffix) {
+				return true
+			}
 		}
 	}
+
+	// 路径 B:中文大数量词 + 金融/计量单位 —— 覆盖"万亿美元""亿元""千亿欧元"等
+	// 规则:只要 token 含至少一个大数量级字符(万/亿/千/百/兆),
+	// 且以货币或常见计量单位结尾,就认为是数量短语而非可追踪实体/关键词。
+	// 这类 token 即使不含阿拉伯数字也属于数量描述(路径 A 无法捕获)。
+	const chineseNumMultipliers = "万亿千百兆"
+	for _, r := range runes {
+		if strings.ContainsRune(chineseNumMultipliers, r) {
+			// token 含大数量级字符 → 再检查是否以量词单位结尾
+			for _, suffix := range []string{
+				"美元", "欧元", "英镑", "日元", "港元", "韩元", "卢布",
+				"人民币", "元", "斤", "吨", "克", "升",
+			} {
+				if strings.HasSuffix(token, suffix) {
+					return true
+				}
+			}
+			break
+		}
+	}
+
 	return false
 }
 
@@ -2416,9 +2448,10 @@ func clusterTrackerEvents(articles []model.Article, heatDiscovered map[string]st
 	// hubEntities 是聚类中的"枢纽 entity" — 高频出现在多个不相关事件里。
 	// 它们不参与共现计数,避免"中俄关系" + "中美关税" + "巴西世界杯"
 	// 通过共享"中国/美国"等大国名串成一个超级事件团。
+	// 注意:只收"出现频率极高且单独无话题区分度"的实体;
+	// 俄罗斯/日本等不在此列 — 它们足够具体,与其他实体共现时是有效聚类信号。
 	hubEntities := map[string]struct{}{
-		"中国": {}, "美国": {}, "日本": {}, "韩国": {}, "俄罗斯": {},
-		"印度": {}, "英国": {}, "法国": {}, "德国": {},
+		"中国": {}, "美国": {},
 		"北京": {}, "上海": {},
 		"AI": {},
 	}
@@ -2563,7 +2596,7 @@ func clusterTrackerEvents(articles []model.Article, heatDiscovered map[string]st
 		// 找最高热度文章作为代表;同时累积 momentum 数据
 		var bestIdx int
 		var bestHeat int64
-		var latestIdx int
+		latestIdx := members[0] // 初始化为组内第一篇,避免零值指向全局 metas[0]
 		var latestPublishedAt time.Time
 		entitySet := make(map[string]struct{})
 		keywordSet := make(map[string]struct{})

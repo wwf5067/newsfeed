@@ -142,8 +142,8 @@ func (r *Repository) ListRecentArticles(ctx context.Context, windowHours, limit 
 	if windowHours <= 0 || windowHours > 168 {
 		windowHours = 24
 	}
-	if limit <= 0 || limit > 500 {
-		limit = 200
+	if limit <= 0 || limit > 1000 {
+		limit = 500
 	}
 	const q = `
 SELECT id, source_key, url, title, content, author,
