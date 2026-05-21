@@ -2582,12 +2582,24 @@ func clusterTrackerEvents(articles []model.Article, heatDiscovered map[string]st
 	// hubEntities 是聚类中的"枢纽 entity" — 高频出现在多个不相关事件里。
 	// 它们不参与共现计数,避免"中俄关系" + "中美关税" + "巴西世界杯"
 	// 通过共享"中国/美国"等大国名串成一个超级事件团。
-	// 注意:只收"出现频率极高且单独无话题区分度"的实体;
-	// 俄罗斯/日本等不在此列 — 它们足够具体,与其他实体共现时是有效聚类信号。
+	// 基础集合保持静态;同时动态扩展:当前批次中覆盖率 > 40% 的实体自动加入,
+	// 以适应新闻周期中突然泛滥的新词(如某段时间 80% 文章都提"特朗普")。
 	hubEntities := map[string]struct{}{
 		"中国": {}, "美国": {},
 		"北京": {}, "上海": {},
 		"AI": {},
+	}
+	// 动态扩展:覆盖当前批次文章 >40% 的实体无区分度,自动纳入 hub。
+	// 仅在文章数 >= 20 时生效:样本过小时所有文章可能属于同一话题,
+	// 高覆盖率是正常现象而非泛化大词。
+	const hubCoverageThreshold = 0.40
+	const hubMinArticles = 20
+	if len(metas) >= hubMinArticles {
+		for label, idxList := range entityToArticles {
+			if float64(len(idxList))/float64(len(metas)) > hubCoverageThreshold {
+				hubEntities[label] = struct{}{}
+			}
+		}
 	}
 
 	const titleCosineThreshold = 0.16
