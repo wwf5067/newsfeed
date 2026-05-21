@@ -2822,17 +2822,21 @@ func clusterTrackerEvents(articles []model.Article, heatDiscovered map[string]st
 
 		totalScore := applySourceDiversityBoost(baseScore, len(sourceCount))
 
-		// 标记哪些实体/关键词是系统自动发现的(不在静态词典中)
+		// 标记哪些实体/关键词是系统自动发现的(不在静态词典中 或 已转正)
 		var hdEntities, hdKeywords []string
 		for _, e := range entities {
-			if _, inLexicon := trackerEntityLabelSet[e]; !inLexicon {
+			if IsPromotedWord(e) {
+				hdEntities = append(hdEntities, e)
+			} else if _, inLexicon := trackerEntityLabelSet[e]; !inLexicon {
 				if _, inGeo := strongGeoNames[e]; !inGeo {
 					hdEntities = append(hdEntities, e)
 				}
 			}
 		}
 		for _, k := range keywords {
-			if _, inVerb := strongVerbs[k]; !inVerb {
+			if IsPromotedWord(k) {
+				hdKeywords = append(hdKeywords, k)
+			} else if _, inVerb := strongVerbs[k]; !inVerb {
 				if _, inTopic := strongTopicNouns[k]; !inTopic {
 					if _, inLexicon := trackerEntityLabelSet[k]; !inLexicon {
 						hdKeywords = append(hdKeywords, k)

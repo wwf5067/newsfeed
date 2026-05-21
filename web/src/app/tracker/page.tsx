@@ -336,7 +336,7 @@ function TrackerPageContent() {
               <h1 className="text-2xl font-semibold text-zinc-900 dark:text-zinc-100">{data.term}</h1>
               {data.is_heat_discovered && (
                 data.is_promoted
-                  ? <span className="rounded bg-blue-100 px-1.5 py-0.5 text-[10px] font-bold text-blue-700 dark:bg-blue-900 dark:text-blue-300">已入库</span>
+                  ? <span className="rounded bg-blue-100 px-1.5 py-0.5 text-[10px] font-bold uppercase text-blue-700 dark:bg-blue-900 dark:text-blue-300">new</span>
                   : <span className="rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] font-bold uppercase text-emerald-700 dark:bg-emerald-900 dark:text-emerald-300">new</span>
               )}
               {data.is_heat_discovered && (
