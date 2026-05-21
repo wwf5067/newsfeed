@@ -680,6 +680,38 @@ func isExcludedHeatWord(word string) bool {
 	return false
 }
 
+// topicFreqThreshold 话题级泛化词阈值。
+// 比 heatFreqThreshold(2000) 更严格:独立成为话题卡片的门槛更高。
+// 分界线:保留词最高 freq=510(裁员),过滤词最低 freq=635(元首)。
+const topicFreqThreshold = 600
+
+// isGenericTopicByFreq 判断一个 topic label 是否太泛化不适合独立成卡片。
+// 规则:词典词频 > topicFreqThreshold 且不在任何白名单中 → 过滤。
+// 白名单包括:trackerEntityLabelSet / strongGeoNames / strongVerbs / strongTopicNouns。
+func isGenericTopicByFreq(label string) bool {
+	// 白名单豁免
+	if _, ok := trackerEntityLabelSet[label]; ok {
+		return false
+	}
+	if _, ok := strongGeoNames[label]; ok {
+		return false
+	}
+	if _, ok := strongVerbs[label]; ok {
+		return false
+	}
+	if _, ok := strongTopicNouns[label]; ok {
+		return false
+	}
+	// 词频检查
+	trackerSegOnce.Do(loadTrackerSegmenter)
+	if trackerSegErr == nil {
+		if freq, _, ok := trackerSeg.Find(label); ok && freq > topicFreqThreshold {
+			return true
+		}
+	}
+	return false
+}
+
 func buildTrackerTopics(
 	articles []model.Article,
 	deltas []WindowDelta,
@@ -725,6 +757,12 @@ func buildTrackerTopics(
 		}
 		// 以前用 acc.Score == 0 过滤,现在还按这个走,确保 entity 至少有热度数据
 		if acc.Score == 0 {
+			continue
+		}
+		// 泛化词自动过滤:gse 词频 > topicFreqThreshold 的词太通用,
+		// 不值得作为独立话题(如"男孩""事件""通报""元首")。
+		// 但已在白名单(词典/strongGeo/strongVerb/strongTopicNouns)中的词跳过此检查。
+		if isGenericTopicByFreq(acc.Label) {
 			continue
 		}
 		// 文章按发布时间降序(最新在前)
