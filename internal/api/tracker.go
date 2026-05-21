@@ -752,6 +752,11 @@ func buildTrackerTopics(
 		if _, isBroad := broadGeoEntities[acc.Label]; isBroad && acc.Count < broadGeoMinCount {
 			continue
 		}
+		// 超泛地名即使过了门槛也不独立展示为卡片(中国/美国/俄罗斯这类),
+		// 它们作为背景信息已通过 related_terms 和事件聚类体现。
+		if _, isBroad := broadGeoEntities[acc.Label]; isBroad {
+			continue
+		}
 		if acc.Count < 2 {
 			continue
 		}
