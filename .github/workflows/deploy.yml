@@ -44,7 +44,7 @@ jobs:
       packages: write
     strategy:
       matrix:
-        service: [api, crawler]
+        service: [api, crawler, extractor]
     steps:
       - uses: actions/checkout@v4
 
@@ -186,6 +186,7 @@ jobs:
 
           sed -i "s|^API_IMAGE=.*|API_IMAGE=ghcr.io/${OWNER}/newsfeed-api:${IMAGE_TAG}|" .env
           sed -i "s|^CRAWLER_IMAGE=.*|CRAWLER_IMAGE=ghcr.io/${OWNER}/newsfeed-crawler:${IMAGE_TAG}|" .env
+          sed -i "s|^EXTRACTOR_IMAGE=.*|EXTRACTOR_IMAGE=ghcr.io/${OWNER}/newsfeed-extractor:${IMAGE_TAG}|" .env
 
           docker compose -f docker-compose.prod.yml --progress plain pull
           docker compose -f docker-compose.prod.yml --progress plain --profile migrate run --rm migrate
@@ -203,9 +204,11 @@ jobs:
 
           EXPECTED_API="ghcr.io/${OWNER}/newsfeed-api:${IMAGE_TAG}"
           EXPECTED_CRAWLER="ghcr.io/${OWNER}/newsfeed-crawler:${IMAGE_TAG}"
+          EXPECTED_EXTRACTOR="ghcr.io/${OWNER}/newsfeed-extractor:${IMAGE_TAG}"
 
           ACTUAL_API=$(docker inspect --format '{{.Config.Image}}' newsfeed-api-1)
           ACTUAL_CRAWLER=$(docker inspect --format '{{.Config.Image}}' newsfeed-crawler-1)
+          ACTUAL_EXTRACTOR=$(docker inspect --format '{{.Config.Image}}' newsfeed-extractor-1)
 
           if [ "$ACTUAL_API" != "$EXPECTED_API" ]; then
             echo "ERROR: api image mismatch: expected=$EXPECTED_API actual=$ACTUAL_API" >&2
@@ -213,6 +216,10 @@ jobs:
           fi
           if [ "$ACTUAL_CRAWLER" != "$EXPECTED_CRAWLER" ]; then
             echo "ERROR: crawler image mismatch: expected=$EXPECTED_CRAWLER actual=$ACTUAL_CRAWLER" >&2
+            exit 1
+          fi
+          if [ "$ACTUAL_EXTRACTOR" != "$EXPECTED_EXTRACTOR" ]; then
+            echo "ERROR: extractor image mismatch: expected=$EXPECTED_EXTRACTOR actual=$ACTUAL_EXTRACTOR" >&2
             exit 1
           fi
 
