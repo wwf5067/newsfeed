@@ -893,17 +893,11 @@ func accumulateTrackerTopics(
 				Sources:      map[string]int{},
 				RelatedTerms: map[string]struct{}{},
 			}
-			// 标记是否来自热词发现:不在静态词典中的词 = 热词发现产出
-			if _, inLexicon := trackerEntityLabelSet[c.Label]; !inLexicon {
-				if _, inGeo := strongGeoNames[c.Label]; !inGeo {
-					if _, inVerb := strongVerbs[c.Label]; !inVerb {
-						if _, inTopic := strongTopicNouns[c.Label]; !inTopic {
-							acc.IsHeatDiscovered = true
-						}
-					}
-				}
-			}
 			accs[key] = acc
+		}
+		// 标记是否来自热词发现:只有 heatDiscovered map 中的词才标记
+		if _, ok := heatDiscovered[c.Label]; ok {
+			acc.IsHeatDiscovered = true
 		}
 
 		acc.Count++
@@ -2809,20 +2803,16 @@ func clusterTrackerEvents(articles []model.Article, heatDiscovered map[string]st
 
 		totalScore := applySourceDiversityBoost(baseScore, len(sourceCount))
 
-		// 标记哪些实体/关键词是热词发现来的(不在静态词典中)
+		// 标记哪些实体/关键词是热词发现来的
 		var hdEntities, hdKeywords []string
 		for _, e := range entities {
-			if _, inLexicon := trackerEntityLabelSet[e]; !inLexicon {
-				if _, inGeo := strongGeoNames[e]; !inGeo {
-					hdEntities = append(hdEntities, e)
-				}
+			if _, ok := heatDiscovered[e]; ok {
+				hdEntities = append(hdEntities, e)
 			}
 		}
 		for _, k := range keywords {
-			if _, inVerb := strongVerbs[k]; !inVerb {
-				if _, inTopic := strongTopicNouns[k]; !inTopic {
-					hdKeywords = append(hdKeywords, k)
-				}
+			if _, ok := heatDiscovered[k]; ok {
+				hdKeywords = append(hdKeywords, k)
 			}
 		}
 
