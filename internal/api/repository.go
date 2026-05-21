@@ -662,6 +662,7 @@ func (r *Repository) ListPromotedCandidates(ctx context.Context) ([]HeatCandidat
 
 // PromoteCandidates 将满足阈值的候选词批量转正。
 // 条件: hit_days >= minDays AND total_hits >= minHits AND promoted_at IS NULL
+//       AND word 不在 heat_blacklist(防止删除后被自动复活)。
 // 返回转正的词列表。
 func (r *Repository) PromoteCandidates(ctx context.Context, minDays, minHits int) ([]HeatCandidate, error) {
 	rows, err := r.pool.Query(ctx, `
@@ -670,6 +671,7 @@ func (r *Repository) PromoteCandidates(ctx context.Context, minDays, minHits int
 		WHERE promoted_at IS NULL
 		  AND hit_days >= $1
 		  AND total_hits >= $2
+		  AND word NOT IN (SELECT word FROM heat_blacklist)
 		RETURNING id, word, kind, hit_days, total_hits, promoted_at
 	`, minDays, minHits)
 	if err != nil {
