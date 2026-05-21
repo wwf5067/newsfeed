@@ -211,6 +211,7 @@ function TrackerPageContent() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [subscribeMsg, setSubscribeMsg] = useState<string | null>(null);
   const [related, setRelated] = useState<RelatedTrackerResp | null>(null);
   const [subscriptionId, setSubscriptionId] = useState<number | null>(null);
@@ -342,14 +343,21 @@ function TrackerPageContent() {
               {data.is_heat_discovered && (
                 <button
                   type="button"
+                  disabled={deleting}
                   onClick={async () => {
-                    await fetch(`/api/v1/trackers/heat-words/${encodeURIComponent(data.term)}`, { method: "DELETE" });
-                    router.push("/");
+                    setDeleting(true);
+                    try {
+                      await fetch(`/api/v1/trackers/heat-words/${encodeURIComponent(data.term)}`, { method: "DELETE" });
+                      router.refresh();
+                      router.push("/");
+                    } finally {
+                      setDeleting(false);
+                    }
                   }}
-                  className="rounded px-1.5 py-0.5 text-[11px] text-zinc-400 hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-950 dark:hover:text-red-400"
+                  className="rounded px-1.5 py-0.5 text-[11px] text-zinc-400 hover:bg-red-50 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-50 dark:hover:bg-red-950 dark:hover:text-red-400"
                   title="移除此热词并加入黑名单"
                 >
-                  ✕ 移除
+                  {deleting ? "删除中…" : "✕ 移除"}
                 </button>
               )}
             </div>

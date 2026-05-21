@@ -436,13 +436,13 @@ func (h *Handler) GetArticleKeywords(w http.ResponseWriter, r *http.Request) {
 	keywords := make([]string, 0, 5)
 	// 先挑 entity
 	for _, c := range candidates {
-		if c.Kind == "entity" && len(keywords) < 5 {
+		if c.Kind == "entity" && !isBlacklisted(c.Label) && len(keywords) < 5 {
 			keywords = append(keywords, c.Label)
 		}
 	}
 	// 再补 keyword
 	for _, c := range candidates {
-		if c.Kind == "keyword" && len(keywords) < 5 {
+		if c.Kind == "keyword" && !isBlacklisted(c.Label) && len(keywords) < 5 {
 			// 去重
 			dup := false
 			for _, k := range keywords {
@@ -558,6 +558,11 @@ func (h *Handler) persistHeatCandidates(discovered map[string]struct{}, articles
 	if len(promoted) > 0 {
 		// 注入运行时词典
 		InjectPromotedWords(promoted)
+		// 转正后 promotedWordSet 已更新,旧缓存里 is_promoted / promoted_terms 字段已过期,
+		// 必须清缓存让下次请求重算,否则首页会在缓存有效期内持续显示蓝底(未入库)。
+		h.trackerMu.Lock()
+		h.trackerCache = map[trackerCacheKey]trackerCacheEntry{}
+		h.trackerMu.Unlock()
 		for _, c := range promoted {
 			h.logger.Info("heat candidate promoted",
 				"word", c.Word, "kind", c.Kind,

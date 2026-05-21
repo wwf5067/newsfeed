@@ -936,8 +936,17 @@ export default function Home() {
   const handleDeleteHeatWord = async (word: string) => {
     try {
       await fetch(`/api/v1/trackers/heat-words/${encodeURIComponent(word)}`, { method: "DELETE" });
-      // 乐观更新:移除该 topic + 从事件中移除
-      setTopics((prev) => prev.filter((t) => t.label !== word));
+      // 乐观更新:移除该 topic + 从事件/关联词中移除
+      setTopics((prev) =>
+        prev
+          .filter((t) => t.label !== word)
+          .map((t) => ({
+            ...t,
+            related_terms: t.related_terms.filter((r) => r !== word),
+            promoted_terms: t.promoted_terms?.filter((r) => r !== word),
+            heat_discovered_terms: t.heat_discovered_terms?.filter((r) => r !== word),
+          }))
+      );
       setEvents((prev) =>
         prev.map((ev) => ({
           ...ev,
@@ -945,6 +954,8 @@ export default function Home() {
           keywords: ev.keywords.filter((k) => k !== word),
           heat_discovered_entities: ev.heat_discovered_entities?.filter((e) => e !== word),
           heat_discovered_keywords: ev.heat_discovered_keywords?.filter((k) => k !== word),
+          promoted_entities: ev.promoted_entities?.filter((e) => e !== word),
+          promoted_keywords: ev.promoted_keywords?.filter((k) => k !== word),
         }))
       );
     } catch {
