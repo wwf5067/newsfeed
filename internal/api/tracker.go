@@ -33,21 +33,22 @@ type trackerArticleRef struct {
 }
 
 type trackerTopic struct {
-	Label            string              `json:"label"`
-	Kind             string              `json:"kind"`
-	Score            int64               `json:"score"`
-	PrevScore        int64               `json:"prev_score"`
-	ScoreDelta       int64               `json:"score_delta"`
-	Count            int                 `json:"count"`
-	PrevCount        int                 `json:"prev_count"`
-	CountDelta       int                 `json:"count_delta"`
-	Momentum         string              `json:"momentum"`
-	Sources          []trackerSourceStat `json:"sources"`
-	RelatedTerms     []string            `json:"related_terms"`
-	Articles         []trackerArticleRef `json:"articles"`
-	IsHeatDiscovered bool                `json:"is_heat_discovered,omitempty"` // 系统自动发现(不在静态词典)
-	IsPromoted       bool                `json:"is_promoted,omitempty"`        // 已转正,参与 gse 分词
-	SampleArticle    *trackerArticleRef  `json:"sample_article,omitempty"`
+	Label              string              `json:"label"`
+	Kind               string              `json:"kind"`
+	Score              int64               `json:"score"`
+	PrevScore          int64               `json:"prev_score"`
+	ScoreDelta         int64               `json:"score_delta"`
+	Count              int                 `json:"count"`
+	PrevCount          int                 `json:"prev_count"`
+	CountDelta         int                 `json:"count_delta"`
+	Momentum           string              `json:"momentum"`
+	Sources            []trackerSourceStat `json:"sources"`
+	RelatedTerms       []string            `json:"related_terms"`
+	HeatDiscoveredTerms []string           `json:"heat_discovered_terms,omitempty"` // related_terms 中哪些是系统发现的
+	Articles           []trackerArticleRef `json:"articles"`
+	IsHeatDiscovered   bool                `json:"is_heat_discovered,omitempty"`
+	IsPromoted         bool                `json:"is_promoted,omitempty"`
+	SampleArticle      *trackerArticleRef  `json:"sample_article,omitempty"`
 }
 
 type trackerResp struct {
@@ -840,6 +841,7 @@ func buildTrackerTopics(
 			Momentum:         detectMomentum(acc.WindowDelta, acc.NewCount),
 			Sources:          flattenTrackerSources(acc.Sources),
 			RelatedTerms:     flattenTrackerTerms(acc.RelatedTerms, 4),
+			HeatDiscoveredTerms: markHeatDiscoveredTerms(flattenTrackerTerms(acc.RelatedTerms, 4)),
 			Articles:         topArticles,
 			IsHeatDiscovered: acc.IsHeatDiscovered,
 			IsPromoted:       acc.IsPromoted,
@@ -3201,6 +3203,25 @@ func flattenTrackerTerms(in map[string]struct{}, limit int) []string {
 	sort.Strings(out)
 	if limit > 0 && len(out) > limit {
 		out = out[:limit]
+	}
+	return out
+}
+
+// markHeatDiscoveredTerms 标记 terms 列表中哪些是系统自动发现的(不在静态词典或已转正)。
+func markHeatDiscoveredTerms(terms []string) []string {
+	var out []string
+	for _, t := range terms {
+		if IsPromotedWord(t) {
+			out = append(out, t)
+		} else if _, inLexicon := trackerEntityLabelSet[t]; !inLexicon {
+			if _, inGeo := strongGeoNames[t]; !inGeo {
+				if _, inVerb := strongVerbs[t]; !inVerb {
+					if _, inTopic := strongTopicNouns[t]; !inTopic {
+						out = append(out, t)
+					}
+				}
+			}
+		}
 	}
 	return out
 }

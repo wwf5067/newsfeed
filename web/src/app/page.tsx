@@ -51,6 +51,7 @@ type TrackerTopic = {
   count_delta: number;
   momentum: "up" | "flat" | "down";
   related_terms: string[];
+  heat_discovered_terms?: string[];
   sources: { source_key: string; count: number }[];
   sample_article?: {
     id: number;
@@ -383,16 +384,26 @@ function TopicGroup({
       {/* 关联词 chips + 时间线链接: 与事件卡片实体行保持一致 */}
       {topic.related_terms.length > 0 && (
         <div className="flex flex-wrap items-center gap-1 border-t border-zinc-50 px-3 py-1.5 dark:border-zinc-800/50">
-          {topic.related_terms.slice(0, 5).map((term) => (
-            <button
-              key={term}
-              type="button"
-              onClick={() => onSearch(term)}
-              className="rounded-full bg-amber-50 px-1.5 py-0.5 text-[11px] font-medium text-amber-700 hover:bg-amber-100 dark:bg-amber-950 dark:text-amber-300 dark:hover:bg-amber-900"
-            >
-              {term}
-            </button>
-          ))}
+          {topic.related_terms.slice(0, 5).map((term) => {
+            const isHd = topic.heat_discovered_terms?.includes(term);
+            return (
+              <span key={term} className="inline-flex items-center gap-0.5">
+                <button
+                  type="button"
+                  onClick={() => onSearch(term)}
+                  className="rounded-full bg-amber-50 px-1.5 py-0.5 text-[11px] font-medium text-amber-700 hover:bg-amber-100 dark:bg-amber-950 dark:text-amber-300 dark:hover:bg-amber-900"
+                >
+                  {term}
+                </button>
+                {isHd && (
+                  <span className="rounded bg-emerald-100 px-0.5 text-[8px] font-bold text-emerald-700 dark:bg-emerald-900 dark:text-emerald-300">N</span>
+                )}
+                {isHd && onDeleteHeatWord && (
+                  <button type="button" onClick={() => onDeleteHeatWord(term)} className="text-[10px] text-zinc-300 hover:text-red-500">✕</button>
+                )}
+              </span>
+            );
+          })}
           <Link
             href={`/tracker?term=${encodeURIComponent(topic.label)}&window=${windowHours}`}
             className="ml-auto shrink-0 text-[11px] text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200"
