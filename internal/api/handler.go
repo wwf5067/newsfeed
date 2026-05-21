@@ -525,18 +525,16 @@ func (h *Handler) persistHeatCandidates(discovered map[string]struct{}, articles
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	// 统计每个发现词在当前文章集合中的命中次数
+	// 统计每个发现词在当前文章集合中的命中次数。
+	// 注意:用 strings.Contains 而非 token 等值比较 — bigram 合并出来的复合词
+	// (如"韩红基金""中俄关系")在 gse 单次切词中绝不会作为整体 token 出现,
+	// 用 token == word 永远 hit=0,导致 bigram 类候选词总积累不到 5 hits,
+	// 永远无法转正。改成子串包含后,只要标题里出现该词就计 1 次。
 	for word := range discovered {
 		hitCount := 0
 		for _, a := range articles {
-			tokens := segmentTitle(a.Title)
-			for _, tok := range tokens {
-				cleaned := normalizeLexiconAlias(tok)
-				cleaned = canonicalizeTrackerToken(cleaned)
-				if cleaned == word {
-					hitCount++
-					break
-				}
+			if strings.Contains(a.Title, word) {
+				hitCount++
 			}
 		}
 
