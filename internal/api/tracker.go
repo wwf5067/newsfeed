@@ -2695,10 +2695,14 @@ func clusterTrackerEvents(articles []model.Article, heatDiscovered map[string]st
 		}
 	}
 
-	const titleCosineThreshold = 0.16
-	const titleCosineSparseResidualThreshold = 0.06
-	const titleCosineRawFallbackThreshold = 0.20
-	const pairLinkThreshold = 0.42
+	const titleCosineThreshold = 0.14
+	const titleCosineSparseResidualThreshold = 0.05
+	const titleCosineRawFallbackThreshold = 0.18
+	// pairLinkThreshold 0.42 → 0.35:小窗口(3-6h)文章池小、共现稀疏,
+	// 0.42 时事件聚合很少(prod 实测 3h 仅 4 个事件,文章池 166 篇)。
+	// 0.35 让"共享 1 个具体实体 + 中等标题相似度"也能合并,代价是个别
+	// 弱关联文章可能被合到大事件里 — 比把事件拆得过散更可读。
+	const pairLinkThreshold = 0.35
 	const wEntity = 0.35
 	const wTitle = 0.35
 	const wKeyword = 0.15
