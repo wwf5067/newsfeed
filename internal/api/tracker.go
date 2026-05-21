@@ -742,21 +742,13 @@ func buildTrackerTopics(
 	}
 
 	sort.Slice(items, func(i, j int) bool {
-		// momentum rank: up=0, flat=1, down=2 → 升温话题排前面
-		if items[i].Momentum != items[j].Momentum {
-			return trackerMomentumRank(items[i].Momentum) < trackerMomentumRank(items[j].Momentum)
-		}
-		if items[i].ScoreDelta != items[j].ScoreDelta {
-			return items[i].ScoreDelta > items[j].ScoreDelta
-		}
-		if items[i].CountDelta != items[j].CountDelta {
-			return items[i].CountDelta > items[j].CountDelta
-		}
-		if items[i].Score != items[j].Score {
-			return items[i].Score > items[j].Score
-		}
+		// 主排序:当前窗口关联文章数由大到小
 		if items[i].Count != items[j].Count {
 			return items[i].Count > items[j].Count
+		}
+		// 次排序:热度得分
+		if items[i].Score != items[j].Score {
+			return items[i].Score > items[j].Score
 		}
 		return items[i].Label < items[j].Label
 	})
