@@ -33,23 +33,23 @@ type trackerArticleRef struct {
 }
 
 type trackerTopic struct {
-	Label              string              `json:"label"`
-	Kind               string              `json:"kind"`
-	Score              int64               `json:"score"`
-	PrevScore          int64               `json:"prev_score"`
-	ScoreDelta         int64               `json:"score_delta"`
-	Count              int                 `json:"count"`
-	PrevCount          int                 `json:"prev_count"`
-	CountDelta         int                 `json:"count_delta"`
-	Momentum           string              `json:"momentum"`
-	Sources            []trackerSourceStat `json:"sources"`
+	Label               string              `json:"label"`
+	Kind                string              `json:"kind"`
+	Score               int64               `json:"score"`
+	PrevScore           int64               `json:"prev_score"`
+	ScoreDelta          int64               `json:"score_delta"`
+	Count               int                 `json:"count"`
+	PrevCount           int                 `json:"prev_count"`
+	CountDelta          int                 `json:"count_delta"`
+	Momentum            string              `json:"momentum"`
+	Sources             []trackerSourceStat `json:"sources"`
 	RelatedTerms        []string            `json:"related_terms"`
 	HeatDiscoveredTerms []string            `json:"heat_discovered_terms,omitempty"` // related_terms 中系统发现但尚未转正的词(蓝底 N)
-	PromotedTerms       []string            `json:"promoted_terms,omitempty"`         // related_terms 中已转正的词(绿底 N)
-	Articles           []trackerArticleRef `json:"articles"`
-	IsHeatDiscovered   bool                `json:"is_heat_discovered,omitempty"`
-	IsPromoted         bool                `json:"is_promoted,omitempty"`
-	SampleArticle      *trackerArticleRef  `json:"sample_article,omitempty"`
+	PromotedTerms       []string            `json:"promoted_terms,omitempty"`        // related_terms 中已转正的词(绿底 N)
+	Articles            []trackerArticleRef `json:"articles"`
+	IsHeatDiscovered    bool                `json:"is_heat_discovered,omitempty"`
+	IsPromoted          bool                `json:"is_promoted,omitempty"`
+	SampleArticle       *trackerArticleRef  `json:"sample_article,omitempty"`
 }
 
 type trackerResp struct {
@@ -70,8 +70,8 @@ type trackerEventGroup struct {
 	Articles               []trackerArticleRef `json:"articles"`
 	HeatDiscoveredEntities []string            `json:"heat_discovered_entities,omitempty"` // 尚未转正的热发现实体(蓝底 N)
 	HeatDiscoveredKeywords []string            `json:"heat_discovered_keywords,omitempty"` // 尚未转正的热发现关键词(蓝底 N)
-	PromotedEntities       []string            `json:"promoted_entities,omitempty"`         // 已转正的实体(绿底 N)
-	PromotedKeywords       []string            `json:"promoted_keywords,omitempty"`         // 已转正的关键词(绿底 N)
+	PromotedEntities       []string            `json:"promoted_entities,omitempty"`        // 已转正的实体(绿底 N)
+	PromotedKeywords       []string            `json:"promoted_keywords,omitempty"`        // 已转正的关键词(绿底 N)
 }
 
 type trackerStorylineResp struct {
@@ -735,10 +735,10 @@ func isExcludedHeatWord(word string) bool {
 // 通过提高常见词的 minArticles 阈值来代替之前的硬截断(freq > 2000 直接排除),
 // 让高频词在真实爆发时仍然能被发现,而非永久屏蔽。
 //
-//   freq ≤ 500  → minArticles = 2  (稀有词/新词:少量命中即有价值)
-//   501-2000   → minArticles = 3
-//   2001-5000  → minArticles = 4  ("红包"大约在这个区间)
-//   > 5000     → minArticles = 8  (极通用词:需要大规模爆发才入选)
+//	freq ≤ 500  → minArticles = 2  (稀有词/新词:少量命中即有价值)
+//	501-2000   → minArticles = 3
+//	2001-5000  → minArticles = 4  ("红包"大约在这个区间)
+//	> 5000     → minArticles = 8  (极通用词:需要大规模爆发才入选)
 func heatMinArticles(word string) int {
 	trackerSegOnce.Do(loadTrackerSegmenter)
 	if trackerSegErr != nil {
@@ -2303,6 +2303,13 @@ func shouldKeepTrackerToken(token string) bool {
 	if _, ok := trackerEntityLabelSet[token]; ok {
 		return true
 	}
+	// 已转正的热词(包括 keyword-kind)总是保留 — 用户/系统都把它当成有意义的词了,
+	// 不能因为 isWeakChineseFragment / stopTokens 这类启发式规则把它丢回去。
+	// 例:"张雪" promoted as keyword,prod 标题"张雪宣布捐赠..."里 directPromoted
+	// scan 已经把它放进 ordered,这里如果不放行,后面 line ~1207 的 continue 会丢掉它。
+	if _, ok := promotedWordSet[token]; ok {
+		return true
+	}
 	if isGenericRoleToken(token) {
 		return false
 	}
@@ -2924,7 +2931,7 @@ func clusterTrackerEvents(articles []model.Article, heatDiscovered map[string]st
 
 		// 标记哪些实体/关键词是系统自动发现的(不在静态词典中 或 已转正),
 		// 并按转正状态分为两组:promoted (绿底 N) 和 discovered (蓝底 N)。
-		var hdEntities, hdKeywords []string     // 尚未转正(蓝底 N)
+		var hdEntities, hdKeywords []string       // 尚未转正(蓝底 N)
 		var promoEntities, promoKeywords []string // 已转正(绿底 N)
 		for _, e := range entities {
 			if IsPromotedWord(e) {
