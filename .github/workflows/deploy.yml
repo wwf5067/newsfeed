@@ -184,9 +184,18 @@ jobs:
             exit 1
           fi
 
-          sed -i "s|^API_IMAGE=.*|API_IMAGE=ghcr.io/${OWNER}/newsfeed-api:${IMAGE_TAG}|" .env
-          sed -i "s|^CRAWLER_IMAGE=.*|CRAWLER_IMAGE=ghcr.io/${OWNER}/newsfeed-crawler:${IMAGE_TAG}|" .env
-          sed -i "s|^EXTRACTOR_IMAGE=.*|EXTRACTOR_IMAGE=ghcr.io/${OWNER}/newsfeed-extractor:${IMAGE_TAG}|" .env
+          # upsert: 有就替换,没有就追加(防止 .env 缺 key 时 sed 静默无效)
+          upsert_env() {
+            local key="$1" val="$2"
+            if grep -q "^${key}=" .env; then
+              sed -i "s|^${key}=.*|${key}=${val}|" .env
+            else
+              echo "${key}=${val}" >> .env
+            fi
+          }
+          upsert_env API_IMAGE       "ghcr.io/${OWNER}/newsfeed-api:${IMAGE_TAG}"
+          upsert_env CRAWLER_IMAGE   "ghcr.io/${OWNER}/newsfeed-crawler:${IMAGE_TAG}"
+          upsert_env EXTRACTOR_IMAGE "ghcr.io/${OWNER}/newsfeed-extractor:${IMAGE_TAG}"
 
           docker compose -f docker-compose.prod.yml --progress plain pull
           docker compose -f docker-compose.prod.yml --progress plain --profile migrate run --rm migrate
