@@ -52,6 +52,7 @@ type TrackerTopic = {
   momentum: "up" | "flat" | "down";
   related_terms: string[];
   heat_discovered_terms?: string[];
+  promoted_terms?: string[];
   sources: { source_key: string; count: number }[];
   sample_article?: {
     id: number;
@@ -89,6 +90,8 @@ type TrackerEventGroup = {
   articles: { id: number; title: string; source_key: string; heat_value: number }[];
   heat_discovered_entities?: string[];
   heat_discovered_keywords?: string[];
+  promoted_entities?: string[];
+  promoted_keywords?: string[];
 };
 
 type HotlistItem = {
@@ -361,8 +364,8 @@ function TopicGroup({
           </Link>
           {topic.is_heat_discovered && (
             topic.is_promoted
-              ? <span className="rounded bg-blue-100 px-1 py-0.5 text-[9px] font-bold uppercase text-blue-700 dark:bg-blue-900 dark:text-blue-300">new</span>
-              : <span className="rounded bg-emerald-100 px-1 py-0.5 text-[9px] font-bold uppercase text-emerald-700 dark:bg-emerald-900 dark:text-emerald-300">new</span>
+              ? <span className="rounded bg-emerald-100 px-1 py-0.5 text-[9px] font-bold uppercase text-emerald-700 dark:bg-emerald-900 dark:text-emerald-300">N</span>
+              : <span className="rounded bg-blue-100 px-1 py-0.5 text-[9px] font-bold uppercase text-blue-700 dark:bg-blue-900 dark:text-blue-300">N</span>
           )}
           <span className={`shrink-0 text-[11px] font-medium ${m.cls}`}>{m.icon} {m.text}</span>
         </div>
@@ -385,7 +388,9 @@ function TopicGroup({
       {topic.related_terms.length > 0 && (
         <div className="flex flex-wrap items-center gap-1 border-t border-zinc-50 px-3 py-1.5 dark:border-zinc-800/50">
           {topic.related_terms.slice(0, 5).map((term) => {
-            const isHd = topic.heat_discovered_terms?.includes(term);
+            const isPromoted = topic.promoted_terms?.includes(term);
+            const isDiscovered = !isPromoted && topic.heat_discovered_terms?.includes(term);
+            const isHd = isPromoted || isDiscovered;
             return (
               <span key={term} className="inline-flex items-center gap-0.5">
                 <button
@@ -395,8 +400,11 @@ function TopicGroup({
                 >
                   {term}
                 </button>
-                {isHd && (
+                {isPromoted && (
                   <span className="rounded bg-emerald-100 px-0.5 text-[8px] font-bold text-emerald-700 dark:bg-emerald-900 dark:text-emerald-300">N</span>
+                )}
+                {isDiscovered && (
+                  <span className="rounded bg-blue-100 px-0.5 text-[8px] font-bold text-blue-700 dark:bg-blue-900 dark:text-blue-300">N</span>
                 )}
                 {isHd && onDeleteHeatWord && (
                   <button type="button" onClick={() => onDeleteHeatWord(term)} className="text-[10px] text-zinc-300 hover:text-red-500">✕</button>
@@ -496,9 +504,17 @@ function EventGroupCard({ event, windowHours, onDeleteHeatWord }: { event: Track
               >
                 {e}
               </Link>
-              {event.heat_discovered_entities?.includes(e) && (
+              {event.promoted_entities?.includes(e) && (
                 <>
                   <span className="rounded bg-emerald-100 px-0.5 text-[8px] font-bold text-emerald-700 dark:bg-emerald-900 dark:text-emerald-300">N</span>
+                  {onDeleteHeatWord && (
+                    <button type="button" onClick={() => onDeleteHeatWord(e)} className="text-[10px] text-zinc-300 hover:text-red-500">✕</button>
+                  )}
+                </>
+              )}
+              {event.heat_discovered_entities?.includes(e) && (
+                <>
+                  <span className="rounded bg-blue-100 px-0.5 text-[8px] font-bold text-blue-700 dark:bg-blue-900 dark:text-blue-300">N</span>
                   {onDeleteHeatWord && (
                     <button type="button" onClick={() => onDeleteHeatWord(e)} className="text-[10px] text-zinc-300 hover:text-red-500">✕</button>
                   )}
@@ -514,9 +530,17 @@ function EventGroupCard({ event, windowHours, onDeleteHeatWord }: { event: Track
               >
                 {k}
               </Link>
-              {event.heat_discovered_keywords?.includes(k) && (
+              {event.promoted_keywords?.includes(k) && (
                 <>
                   <span className="rounded bg-emerald-100 px-0.5 text-[8px] font-bold text-emerald-700 dark:bg-emerald-900 dark:text-emerald-300">N</span>
+                  {onDeleteHeatWord && (
+                    <button type="button" onClick={() => onDeleteHeatWord(k)} className="text-[10px] text-zinc-300 hover:text-red-500">✕</button>
+                  )}
+                </>
+              )}
+              {event.heat_discovered_keywords?.includes(k) && (
+                <>
+                  <span className="rounded bg-blue-100 px-0.5 text-[8px] font-bold text-blue-700 dark:bg-blue-900 dark:text-blue-300">N</span>
                   {onDeleteHeatWord && (
                     <button type="button" onClick={() => onDeleteHeatWord(k)} className="text-[10px] text-zinc-300 hover:text-red-500">✕</button>
                   )}

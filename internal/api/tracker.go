@@ -43,8 +43,9 @@ type trackerTopic struct {
 	CountDelta         int                 `json:"count_delta"`
 	Momentum           string              `json:"momentum"`
 	Sources            []trackerSourceStat `json:"sources"`
-	RelatedTerms       []string            `json:"related_terms"`
-	HeatDiscoveredTerms []string           `json:"heat_discovered_terms,omitempty"` // related_terms 中哪些是系统发现的
+	RelatedTerms        []string            `json:"related_terms"`
+	HeatDiscoveredTerms []string            `json:"heat_discovered_terms,omitempty"` // related_terms 中系统发现但尚未转正的词(蓝底 N)
+	PromotedTerms       []string            `json:"promoted_terms,omitempty"`         // related_terms 中已转正的词(绿底 N)
 	Articles           []trackerArticleRef `json:"articles"`
 	IsHeatDiscovered   bool                `json:"is_heat_discovered,omitempty"`
 	IsPromoted         bool                `json:"is_promoted,omitempty"`
@@ -67,8 +68,10 @@ type trackerEventGroup struct {
 	Momentum               string              `json:"momentum"`
 	Sources                []trackerSourceStat `json:"sources"`
 	Articles               []trackerArticleRef `json:"articles"`
-	HeatDiscoveredEntities []string            `json:"heat_discovered_entities,omitempty"`
-	HeatDiscoveredKeywords []string            `json:"heat_discovered_keywords,omitempty"`
+	HeatDiscoveredEntities []string            `json:"heat_discovered_entities,omitempty"` // 尚未转正的热发现实体(蓝底 N)
+	HeatDiscoveredKeywords []string            `json:"heat_discovered_keywords,omitempty"` // 尚未转正的热发现关键词(蓝底 N)
+	PromotedEntities       []string            `json:"promoted_entities,omitempty"`         // 已转正的实体(绿底 N)
+	PromotedKeywords       []string            `json:"promoted_keywords,omitempty"`         // 已转正的关键词(绿底 N)
 }
 
 type trackerStorylineResp struct {
@@ -847,12 +850,17 @@ func buildTrackerTopics(
 			Momentum:         detectMomentum(acc.WindowDelta, acc.NewCount),
 			Sources:          flattenTrackerSources(acc.Sources),
 			RelatedTerms:     flattenTrackerTerms(acc.RelatedTerms, 4),
-			HeatDiscoveredTerms: markHeatDiscoveredTerms(flattenTrackerTerms(acc.RelatedTerms, 4)),
 			Articles:         topArticles,
 			IsHeatDiscovered: acc.IsHeatDiscovered,
 			IsPromoted:       acc.IsPromoted,
 			SampleArticle:    acc.SampleArticle,
 		})
+	}
+	// 注入关联词的热发现标记(在 items 构建后统一处理,避免每次都重复计算)
+	for i := range items {
+		p, d := splitHeatDiscoveredTerms(items[i].RelatedTerms)
+		items[i].PromotedTerms = p
+		items[i].HeatDiscoveredTerms = d
 	}
 
 	sort.Slice(items, func(i, j int) bool {
@@ -2842,11 +2850,13 @@ func clusterTrackerEvents(articles []model.Article, heatDiscovered map[string]st
 
 		totalScore := applySourceDiversityBoost(baseScore, len(sourceCount))
 
-		// 标记哪些实体/关键词是系统自动发现的(不在静态词典中 或 已转正)
-		var hdEntities, hdKeywords []string
+		// 标记哪些实体/关键词是系统自动发现的(不在静态词典中 或 已转正),
+		// 并按转正状态分为两组:promoted (绿底 N) 和 discovered (蓝底 N)。
+		var hdEntities, hdKeywords []string     // 尚未转正(蓝底 N)
+		var promoEntities, promoKeywords []string // 已转正(绿底 N)
 		for _, e := range entities {
 			if IsPromotedWord(e) {
-				hdEntities = append(hdEntities, e)
+				promoEntities = append(promoEntities, e)
 			} else if _, inLexicon := trackerEntityLabelSet[e]; !inLexicon {
 				if _, inGeo := strongGeoNames[e]; !inGeo {
 					hdEntities = append(hdEntities, e)
@@ -2855,7 +2865,7 @@ func clusterTrackerEvents(articles []model.Article, heatDiscovered map[string]st
 		}
 		for _, k := range keywords {
 			if IsPromotedWord(k) {
-				hdKeywords = append(hdKeywords, k)
+				promoKeywords = append(promoKeywords, k)
 			} else if _, inVerb := strongVerbs[k]; !inVerb {
 				if _, inTopic := strongTopicNouns[k]; !inTopic {
 					if _, inLexicon := trackerEntityLabelSet[k]; !inLexicon {
@@ -2877,6 +2887,8 @@ func clusterTrackerEvents(articles []model.Article, heatDiscovered map[string]st
 				Articles:               eventArticles,
 				HeatDiscoveredEntities: hdEntities,
 				HeatDiscoveredKeywords: hdKeywords,
+				PromotedEntities:       promoEntities,
+				PromotedKeywords:       promoKeywords,
 			},
 			sourceDiversity:   len(sourceCount),
 			latestPublishedAt: latestPublishedAt,
@@ -3225,7 +3237,28 @@ func flattenTrackerTerms(in map[string]struct{}, limit int) []string {
 	return out
 }
 
+// splitHeatDiscoveredTerms 将 terms 中的热发现词按是否已转正分为两组:
+// promoted (已转正, 绿底 N) 和 discovered (尚未转正, 蓝底 N)。
+// 不在任何已知集合中的词才被认为是"系统发现词"。
+func splitHeatDiscoveredTerms(terms []string) (promoted, discovered []string) {
+	for _, t := range terms {
+		if IsPromotedWord(t) {
+			promoted = append(promoted, t)
+		} else if _, inLexicon := trackerEntityLabelSet[t]; !inLexicon {
+			if _, inGeo := strongGeoNames[t]; !inGeo {
+				if _, inVerb := strongVerbs[t]; !inVerb {
+					if _, inTopic := strongTopicNouns[t]; !inTopic {
+						discovered = append(discovered, t)
+					}
+				}
+			}
+		}
+	}
+	return
+}
+
 // markHeatDiscoveredTerms 标记 terms 列表中哪些是系统自动发现的(不在静态词典或已转正)。
+// Deprecated: 新代码请用 splitHeatDiscoveredTerms 分别获取 promoted / discovered。
 func markHeatDiscoveredTerms(terms []string) []string {
 	var out []string
 	for _, t := range terms {
