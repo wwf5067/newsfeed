@@ -1085,6 +1085,18 @@ func extractTrackerCandidates(article model.Article, heatDiscovered map[string]s
 		}
 	}
 
+	// 0.7. 转正词直接扫描:promoted 词已通过 InjectPromotedWords 注入 gse 词典,
+	//      但对2字人名(张雪/李磊)等,gse Viterbi 仍可能拆成单字 → normalizeTrackerToken
+	//      要求 ≥2 字,单字被丢,导致转正词完全缺席候选池。
+	//      strings.Contains 直接匹配兜底,让转正词稳定进入候选池;
+	//      entity-kind 转正词已在 trackerEntityLabelSet → shouldKeepTrackerToken 保留,
+	//      keyword-kind 走正常 looksLikeTopicPhrase 判断。
+	for word := range promotedWordSet {
+		if strings.Contains(title, word) {
+			appendTrackerPool(&ordered, poolSeen, word)
+		}
+	}
+
 	// 1. 词典扫描:整段标题不区分大小写匹配 lexicon 别名,优先级最高。
 	collectTrackerLexiconMatches(title, &ordered, poolSeen)
 
