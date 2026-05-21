@@ -657,10 +657,11 @@ func collectHeatDiscoveredWords(articles []model.Article) map[string]struct{} {
 		}
 	}
 
-	// 筛选满足阈值的 unigram:文章数 >= minArticles 且跨源数 >= minSources
+	// 筛选满足阈值的 unigram:文章数 >= heatMinArticles(word) 且跨源数 >= minSources
+	// heatMinArticles 按 gse 词频动态调整门槛:普通词需要 2 篇,高频词需要 4-8 篇。
 	result := make(map[string]struct{})
 	for word, arts := range wordArticles {
-		if len(arts) >= minArticles && len(wordSources[word]) >= minSources {
+		if len(arts) >= heatMinArticles(word) && len(wordSources[word]) >= minSources {
 			result[word] = struct{}{}
 		}
 	}
@@ -724,14 +725,36 @@ func isExcludedHeatWord(word string) bool {
 	if isAllDigits(word) || looksLikeNumericMeasure(word) {
 		return true
 	}
-	// 自动泛化词过滤:gse 词典词频 > 阈值 → 太通用,不值得作为热词
-	trackerSegOnce.Do(loadTrackerSegmenter)
-	if trackerSegErr == nil {
-		if freq, _, ok := trackerSeg.Find(word); ok && freq > heatFreqThreshold {
-			return true
-		}
-	}
 	return false
+}
+
+// heatMinArticles 按 gse 词典词频动态计算热词发现所需的最少文章数。
+//
+// 原理:常见词(如"红包""涨薪")词频高,日常也会随机出现在少量文章里;
+// 只有当它们的出现频次显著高于基线时才有话题价值。
+// 通过提高常见词的 minArticles 阈值来代替之前的硬截断(freq > 2000 直接排除),
+// 让高频词在真实爆发时仍然能被发现,而非永久屏蔽。
+//
+//   freq ≤ 500  → minArticles = 2  (稀有词/新词:少量命中即有价值)
+//   501-2000   → minArticles = 3
+//   2001-5000  → minArticles = 4  ("红包"大约在这个区间)
+//   > 5000     → minArticles = 8  (极通用词:需要大规模爆发才入选)
+func heatMinArticles(word string) int {
+	trackerSegOnce.Do(loadTrackerSegmenter)
+	if trackerSegErr != nil {
+		return 2
+	}
+	freq, _, ok := trackerSeg.Find(word)
+	if !ok || freq <= 500 {
+		return 2
+	}
+	if freq <= 2000 {
+		return 3
+	}
+	if freq <= 5000 {
+		return 4
+	}
+	return 8
 }
 
 // topicFreqThreshold 话题级泛化词阈值。
@@ -2144,6 +2167,34 @@ var sentenceVerbPrefixes = []string{
 	"采访", "回应", "怒斥", "炮轰", "质疑",
 }
 
+// containsVerbPrepositionPattern 用 gse 词性分析检测 "V+P+O" 结构。
+//
+// 中文句子中"捐款给韩红基金"、"向国家捐献"这类动宾短语会被 gse 切成
+// ≥3 个片段,且同时包含动词(v/vn)和介词(p)。
+// 纯名词短语(如"对华政策")含介词"对"但无动词片段 → 不触发。
+// 独立动词(如"裁员"2字)长度 < 4 → 不触发。
+// 性能:仅在 hanCount ≥ 4 且其他句子检测均未命中时才调用,开销可控。
+func containsVerbPrepositionPattern(token string) bool {
+	if hanRuneCount(token) < 4 {
+		return false
+	}
+	segs := posSegmentTitle(token)
+	if len(segs) < 3 {
+		return false
+	}
+	hasVerb := false
+	hasPrep := false
+	for _, seg := range segs {
+		if strings.HasPrefix(seg.Pos, "v") { // v / vn / vd / vg …
+			hasVerb = true
+		}
+		if seg.Pos == "p" { // 介词:给、向、被、对…
+			hasPrep = true
+		}
+	}
+	return hasVerb && hasPrep
+}
+
 // looksLikeSentence 判定 token 是否看起来是完整句子片段而非实体或短语。
 // 任一信号命中即认为是句子,应当从 keyword 候选中剔除:
 //   - 长度过长(> 10 个汉字,词典命中的 entity 不会到这一步)
@@ -2200,6 +2251,12 @@ func looksLikeSentence(token string) bool {
 				return true
 			}
 		}
+	}
+	// POS 兜底:如果 gse 把 token 切出了 ≥3 个片段,且同时含动词(v/vn)和介词(p),
+	// 说明是"V+给/向+O"这类动宾结构而非实体名称(如"捐款给韩红基金")。
+	// 注:纯名词短语(如"对华政策")含介词"对"但无动词片段,不会被误判。
+	if containsVerbPrepositionPattern(token) {
+		return true
 	}
 	return false
 }
