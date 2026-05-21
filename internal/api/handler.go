@@ -225,7 +225,7 @@ func (h *Handler) ListTrackers(w http.ResponseWriter, r *http.Request) {
 	for _, d := range deltas {
 		deltaByID[d.ArticleID] = d
 	}
-	resp.Events = clusterTrackerEvents(articles, heatDiscovered, deltaByID, 8)
+	resp.Events = clusterTrackerEvents(articles, heatDiscovered, deltaByID, 8, window)
 
 	// 热度候选词持久化(异步,不阻塞响应):将发现的热词写入 DB,检查转正。
 	if len(heatDiscovered) > 0 {
@@ -481,6 +481,12 @@ func (h *Handler) GetHotlist(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
 		return
 	}
+	sogou, err := h.repo.ListHotlistItems(r.Context(), "sogou_hot", top)
+	if err != nil {
+		h.logger.Error("hotlist sogou", "err", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
+		return
+	}
 	if zhihu == nil {
 		zhihu = []HotlistItem{}
 	}
@@ -490,10 +496,14 @@ func (h *Handler) GetHotlist(w http.ResponseWriter, r *http.Request) {
 	if weibo == nil {
 		weibo = []HotlistItem{}
 	}
+	if sogou == nil {
+		sogou = []HotlistItem{}
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"zhihu": zhihu,
 		"baidu": baidu,
 		"weibo": weibo,
+		"sogou": sogou,
 	})
 }
 

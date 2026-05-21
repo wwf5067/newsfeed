@@ -2349,7 +2349,7 @@ func truncateTitleAtWordBoundary(title string, maxRunes int) string {
 // 传 nil 时退化为 "flat"。
 //
 // 性能: 对 500 篇文章 < 20ms(倒排索引避免 O(N²))。
-func clusterTrackerEvents(articles []model.Article, heatDiscovered map[string]struct{}, deltaByID map[int64]WindowDelta, limit int) []trackerEventGroup {
+func clusterTrackerEvents(articles []model.Article, heatDiscovered map[string]struct{}, deltaByID map[int64]WindowDelta, limit int, windowHours int) []trackerEventGroup {
 	if len(articles) == 0 {
 		return nil
 	}
@@ -2548,7 +2548,12 @@ func clusterTrackerEvents(articles []model.Article, heatDiscovered map[string]st
 	}
 
 	// Step 5: 构建事件组
-	events := make([]trackerEventGroup, 0, len(groups))
+	type eventSortKey struct {
+		group             trackerEventGroup
+		sourceDiversity   int
+		latestPublishedAt time.Time
+	}
+	sortKeys := make([]eventSortKey, 0, len(groups))
 	for _, members := range groups {
 		minEventCount := 2
 		if len(members) < minEventCount {
@@ -2566,6 +2571,8 @@ func clusterTrackerEvents(articles []model.Article, heatDiscovered map[string]st
 		// 找最高热度文章作为代表;同时累积 momentum 数据
 		var bestIdx int
 		var bestHeat int64
+		var latestIdx int
+		var latestPublishedAt time.Time
 		entitySet := make(map[string]struct{})
 		keywordSet := make(map[string]struct{})
 		sourceCount := make(map[string]int)
@@ -2580,6 +2587,10 @@ func clusterTrackerEvents(articles []model.Article, heatDiscovered map[string]st
 			if meta.heatValue > bestHeat {
 				bestHeat = meta.heatValue
 				bestIdx = idx
+			}
+			if meta.publishedAt.After(latestPublishedAt) {
+				latestPublishedAt = meta.publishedAt
+				latestIdx = idx
 			}
 			for _, e := range meta.entities {
 				entitySet[e] = struct{}{}
@@ -2597,8 +2608,12 @@ func clusterTrackerEvents(articles []model.Article, heatDiscovered map[string]st
 			}
 		}
 
-		// 代表标题:在词边界处截断,避免切断中文词
-		title := truncateTitleAtWordBoundary(metas[bestIdx].title, 25)
+		// 代表标题:3h 窗口用最新文章标题,其余用最高热度文章标题
+		titleIdx := bestIdx
+		if windowHours <= 3 {
+			titleIdx = latestIdx
+		}
+		title := truncateTitleAtWordBoundary(metas[titleIdx].title, 25)
 
 		// 实体/关键词列表 — 排序保证输出稳定
 		entities := make([]string, 0, len(entitySet))
@@ -2612,53 +2627,77 @@ func clusterTrackerEvents(articles []model.Article, heatDiscovered map[string]st
 		}
 		sort.Strings(keywords)
 
-		// 组内文章(按热度降序):前端默认展示前 3 条,支持展开全部。
+		// 组内文章:3h 窗口按发布时间降序,其余按热度降序。
+		// 前端默认展示前 3 条,支持展开全部。
 		eventArticles := make([]trackerArticleRef, 0, len(members))
-		// 按热度排序
 		type sortItem struct {
-			idx  int
-			heat int64
+			idx         int
+			heat        int64
+			publishedAt time.Time
 		}
 		sorted := make([]sortItem, 0, len(members))
 		for _, idx := range members {
-			sorted = append(sorted, sortItem{idx, metas[idx].heatValue})
+			sorted = append(sorted, sortItem{idx, metas[idx].heatValue, metas[idx].publishedAt})
 		}
-		sort.Slice(sorted, func(i, j int) bool {
-			return sorted[i].heat > sorted[j].heat
-		})
+		if windowHours <= 3 {
+			sort.Slice(sorted, func(i, j int) bool {
+				return sorted[i].publishedAt.After(sorted[j].publishedAt)
+			})
+		} else {
+			sort.Slice(sorted, func(i, j int) bool {
+				return sorted[i].heat > sorted[j].heat
+			})
+		}
 		for _, s := range sorted {
 			m := metas[s.idx]
 			eventArticles = append(eventArticles, trackerArticleRef{
-				ID:        m.id,
-				Title:     m.title,
-				SourceKey: m.sourceKey,
-				HeatValue: m.heatValue,
+				ID:          m.id,
+				Title:       m.title,
+				SourceKey:   m.sourceKey,
+				HeatValue:   m.heatValue,
+				PublishedAt: m.publishedAt,
 			})
 		}
 
 		totalScore := applySourceDiversityBoost(baseScore, len(sourceCount))
 
-		events = append(events, trackerEventGroup{
-			Title:    title,
-			Entities: entities,
-			Keywords: keywords,
-			Score:    totalScore,
-			Count:    len(members),
-			Momentum: detectMomentum(windowDelta, newCount),
-			Sources:  flattenTrackerSources(sourceCount),
-			Articles: eventArticles,
+		sortKeys = append(sortKeys, eventSortKey{
+			group: trackerEventGroup{
+				Title:    title,
+				Entities: entities,
+				Keywords: keywords,
+				Score:    totalScore,
+				Count:    len(members),
+				Momentum: detectMomentum(windowDelta, newCount),
+				Sources:  flattenTrackerSources(sourceCount),
+				Articles: eventArticles,
+			},
+			sourceDiversity:   len(sourceCount),
+			latestPublishedAt: latestPublishedAt,
 		})
 	}
 
-	// 保持原有排序主逻辑:按 score 降序。
-	// 来源多样性已经体现在 totalScore 的加权中(2源 x2,3源 x4),
-	// 避免额外按来源数强行重排导致结果跳变过大。
-	sort.Slice(events, func(i, j int) bool {
-		if events[i].Score != events[j].Score {
-			return events[i].Score > events[j].Score
-		}
-		return events[i].Count > events[j].Count
-	})
+	// 排序:3h 窗口按来源多样性降序、再按最新发布时间降序;其余按 score 降序。
+	if windowHours <= 3 {
+		sort.Slice(sortKeys, func(i, j int) bool {
+			if sortKeys[i].sourceDiversity != sortKeys[j].sourceDiversity {
+				return sortKeys[i].sourceDiversity > sortKeys[j].sourceDiversity
+			}
+			return sortKeys[i].latestPublishedAt.After(sortKeys[j].latestPublishedAt)
+		})
+	} else {
+		sort.Slice(sortKeys, func(i, j int) bool {
+			if sortKeys[i].group.Score != sortKeys[j].group.Score {
+				return sortKeys[i].group.Score > sortKeys[j].group.Score
+			}
+			return sortKeys[i].group.Count > sortKeys[j].group.Count
+		})
+	}
+
+	events := make([]trackerEventGroup, 0, len(sortKeys))
+	for _, k := range sortKeys {
+		events = append(events, k.group)
+	}
 
 	if len(events) > limit {
 		events = events[:limit]

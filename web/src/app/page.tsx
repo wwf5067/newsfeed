@@ -95,6 +95,7 @@ type HotlistResp = {
   zhihu: HotlistItem[];
   baidu: HotlistItem[];
   weibo: HotlistItem[];
+  sogou: HotlistItem[];
 };
 
 // ======================== Constants ========================
@@ -161,7 +162,7 @@ async function fetchHotlist(): Promise<HotlistResp> {
   const res = await fetch("/api/v1/hotlist", { cache: "no-store" });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const data: HotlistResp = await res.json();
-  return { zhihu: data.zhihu ?? [], baidu: data.baidu ?? [], weibo: data.weibo ?? [] };
+  return { zhihu: data.zhihu ?? [], baidu: data.baidu ?? [], weibo: data.weibo ?? [], sogou: data.sogou ?? [] };
 }
 
 // ======================== Formatters ========================
@@ -568,8 +569,8 @@ function CompactRow({ item, rank }: { item: HotlistItem; rank: number }) {
 
 // ======================== HotPanel ========================
 
-function HotPanel({ zhihu, baidu, weibo }: { zhihu: HotlistItem[]; baidu: HotlistItem[]; weibo: HotlistItem[] }) {
-  if (zhihu.length === 0 && baidu.length === 0 && weibo.length === 0) return null;
+function HotPanel({ zhihu, baidu, weibo, sogou }: { zhihu: HotlistItem[]; baidu: HotlistItem[]; weibo: HotlistItem[]; sogou: HotlistItem[] }) {
+  if (zhihu.length === 0 && baidu.length === 0 && weibo.length === 0 && sogou.length === 0) return null;
   return (
     <div className="rounded-lg border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900">
       <div className="flex items-center gap-2 border-b border-zinc-100 px-4 py-2.5 dark:border-zinc-800">
@@ -602,6 +603,16 @@ function HotPanel({ zhihu, baidu, weibo }: { zhihu: HotlistItem[]; baidu: Hotlis
             <span className="text-[11px] font-medium text-zinc-400">微博</span>
           </div>
           {weibo.map((item, i) => (
+            <CompactRow key={item.id} item={item} rank={i + 1} />
+          ))}
+        </>
+      )}
+      {sogou.length > 0 && (
+        <>
+          <div className="border-b border-zinc-50 border-t border-t-zinc-200 px-4 py-1 dark:border-zinc-800/60 dark:border-t-zinc-700">
+            <span className="text-[11px] font-medium text-zinc-400">搜狗</span>
+          </div>
+          {sogou.map((item, i) => (
             <CompactRow key={item.id} item={item} rank={i + 1} />
           ))}
         </>
@@ -681,7 +692,7 @@ export default function Home() {
   const [trackerWindow, setTrackerWindow] = useState(3);
 
   // 热榜(专用接口,直接按 heat_value 排序,不受 published_at 分页影响)
-  const [hotlist, setHotlist] = useState<HotlistResp>({ zhihu: [], baidu: [], weibo: [] });
+  const [hotlist, setHotlist] = useState<HotlistResp>({ zhihu: [], baidu: [], weibo: [], sogou: [] });
 
   // "全部"Tab + 非搜索 = 话题聚合视图; "知乎"/"B站"Tab 或搜索 = 时间流
   const isTopicView = source === "" && !debouncedQ;
@@ -723,7 +734,9 @@ export default function Home() {
   // 拉取文章
   const refresh = useCallback(async () => {
     try {
-      const topicViewLimit = 300;
+      const topicViewLimit =
+        trackerWindow >= 72 ? 800 :
+        trackerWindow >= 24 ? 500 : 300;
       const requestLimit = isTopicView ? topicViewLimit : page * PAGE_SIZE;
       const data = await fetchArticles(source, debouncedQ, requestLimit);
       setArticles(data.items);
@@ -736,7 +749,7 @@ export default function Home() {
       if (initialLoad.current) { setLoading(false); initialLoad.current = false; }
       setLoadingMore(false);
     }
-  }, [source, debouncedQ, page, isTopicView]);
+  }, [source, debouncedQ, page, isTopicView, trackerWindow]);
 
   useEffect(() => {
     refresh();
@@ -1039,12 +1052,12 @@ export default function Home() {
               </div>
             </div>
           )}
-          {(hotlist.zhihu.length > 0 || hotlist.baidu.length > 0 || hotlist.weibo.length > 0) && (
+          {(hotlist.zhihu.length > 0 || hotlist.baidu.length > 0 || hotlist.weibo.length > 0 || hotlist.sogou.length > 0) && (
             <>
               {grouped.length > 0 && (
                 <div className="mb-4 h-px bg-zinc-200 dark:bg-zinc-800" />
               )}
-              <HotPanel zhihu={hotlist.zhihu} baidu={hotlist.baidu} weibo={hotlist.weibo} />
+              <HotPanel zhihu={hotlist.zhihu} baidu={hotlist.baidu} weibo={hotlist.weibo} sogou={hotlist.sogou} />
             </>
           )}
         </>
