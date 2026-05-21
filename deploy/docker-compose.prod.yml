@@ -9,6 +9,7 @@
 #   - nginx 暴露 80 到宿主机
 #   - api 仅在 docker 内网,由 nginx 反代
 #   - crawler 完全不暴露端口
+#   - extractor 完全不暴露端口
 #   - postgres 只在 docker 内网,host 访问需要进容器
 #
 # 数据持久化:命名卷 pgdata
@@ -95,6 +96,21 @@ services:
       SMTP_FROM: ${SMTP_FROM:-}
       DIGEST_TO: ${DIGEST_TO:-}
       SITE_URL: ${SITE_URL:-http://82.156.10.221}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  extractor:
+    image: ${EXTRACTOR_IMAGE}
+    restart: unless-stopped
+    environment:
+      APP_ENV: prod
+      LOG_LEVEL: info
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable
+      EXTRACTOR_ADDR: "127.0.0.1:8082"
+      EXTRACTOR_BACKEND: ${EXTRACTOR_BACKEND:-rule}
+      EXTRACTOR_SCHEDULE: ${EXTRACTOR_SCHEDULE:-0 */5 * * * *}
+      EXTRACTOR_BATCH_SIZE: ${EXTRACTOR_BATCH_SIZE:-50}
     depends_on:
       postgres:
         condition: service_healthy
