@@ -628,3 +628,33 @@ func hasLetterASCII(s string) bool {
 	}
 	return false
 }
+
+// DeleteHeatWord 删除热词(加入黑名单)。
+// DELETE /api/v1/trackers/heat-words/{word}
+func (h *Handler) DeleteHeatWord(w http.ResponseWriter, r *http.Request) {
+	word := chi.URLParam(r, "word")
+	if word == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "word required"})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+
+	if err := h.repo.AddHeatBlacklist(ctx, word); err != nil {
+		h.logger.Error("add heat blacklist", "word", word, "err", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
+		return
+	}
+
+	// 更新内存黑名单
+	AddToHeatBlacklist(word)
+
+	// 清除 tracker 缓存,下次请求重算
+	h.trackerMu.Lock()
+	h.trackerCache = map[trackerCacheKey]trackerCacheEntry{}
+	h.trackerMu.Unlock()
+
+	h.logger.Info("heat word blacklisted", "word", word)
+	w.WriteHeader(http.StatusNoContent)
+}

@@ -67,6 +67,7 @@ type TrackerTopic = {
     heat_value: number;
     published_at: string;
   }[];
+  is_heat_discovered?: boolean;
 };
 
 type TrackerResp = {
@@ -84,6 +85,8 @@ type TrackerEventGroup = {
   momentum: "up" | "flat" | "down";
   sources: { source_key: string; count: number }[];
   articles: { id: number; title: string; source_key: string; heat_value: number }[];
+  heat_discovered_entities?: string[];
+  heat_discovered_keywords?: string[];
 };
 
 type HotlistItem = {
@@ -323,10 +326,12 @@ function TopicGroup({
   topic,
   windowHours,
   onSearch,
+  onDeleteHeatWord,
 }: {
   topic: TrackerTopic;
   windowHours: number;
   onSearch: (q: string) => void;
+  onDeleteHeatWord?: (word: string) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const articles = topic.articles ?? [];
@@ -352,11 +357,24 @@ function TopicGroup({
           >
             {topic.label}
           </Link>
+          {topic.is_heat_discovered && (
+            <span className="rounded bg-emerald-100 px-1 py-0.5 text-[9px] font-bold uppercase text-emerald-700 dark:bg-emerald-900 dark:text-emerald-300">new</span>
+          )}
           <span className={`shrink-0 text-[11px] font-medium ${m.cls}`}>{m.icon} {m.text}</span>
         </div>
         <span className="shrink-0 text-xs font-medium tabular-nums text-emerald-600 dark:text-emerald-400">
           {formatHeat(topic.score)}
         </span>
+        {topic.is_heat_discovered && onDeleteHeatWord && (
+          <button
+            type="button"
+            onClick={() => onDeleteHeatWord(topic.label)}
+            className="shrink-0 text-[11px] text-zinc-300 hover:text-red-500 dark:text-zinc-600 dark:hover:text-red-400"
+            title="移除此热词"
+          >
+            ✕
+          </button>
+        )}
       </div>
 
       {/* 关联词 chips + 时间线链接: 与事件卡片实体行保持一致 */}
@@ -439,7 +457,7 @@ function TopicGroup({
   );
 }
 
-function EventGroupCard({ event, windowHours }: { event: TrackerEventGroup; windowHours: number }) {
+function EventGroupCard({ event, windowHours, onDeleteHeatWord }: { event: TrackerEventGroup; windowHours: number; onDeleteHeatWord?: (word: string) => void }) {
   const [expanded, setExpanded] = useState(false);
   const displayArticles = expanded ? event.articles : event.articles.slice(0, 3);
   const hasMore = event.articles.length > 3;
@@ -457,17 +475,39 @@ function EventGroupCard({ event, windowHours }: { event: TrackerEventGroup; wind
       {(event.entities.length > 0 || event.keywords.length > 0) && (
         <div className="flex flex-wrap gap-1 border-t border-zinc-50 px-3 py-1.5 dark:border-zinc-800/50">
           {event.entities.map((e) => (
-            <Link
-              key={e}
-              href={`/tracker?term=${encodeURIComponent(e)}&window=${windowHours}`}
-              className="rounded-full bg-amber-50 px-1.5 py-0.5 text-[11px] font-medium text-amber-700 hover:bg-amber-100 dark:bg-amber-950 dark:text-amber-300 dark:hover:bg-amber-900"
-            >
-              {e}
-            </Link>
+            <span key={e} className="inline-flex items-center gap-0.5">
+              <Link
+                href={`/tracker?term=${encodeURIComponent(e)}&window=${windowHours}`}
+                className="rounded-full bg-amber-50 px-1.5 py-0.5 text-[11px] font-medium text-amber-700 hover:bg-amber-100 dark:bg-amber-950 dark:text-amber-300 dark:hover:bg-amber-900"
+              >
+                {e}
+              </Link>
+              {event.heat_discovered_entities?.includes(e) && (
+                <>
+                  <span className="rounded bg-emerald-100 px-0.5 text-[8px] font-bold text-emerald-700 dark:bg-emerald-900 dark:text-emerald-300">N</span>
+                  {onDeleteHeatWord && (
+                    <button type="button" onClick={() => onDeleteHeatWord(e)} className="text-[10px] text-zinc-300 hover:text-red-500">✕</button>
+                  )}
+                </>
+              )}
+            </span>
           ))}
           {event.keywords.map((k) => (
-            <span key={k} className="rounded-full bg-zinc-100 px-1.5 py-0.5 text-[11px] text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400">
-              {k}
+            <span key={k} className="inline-flex items-center gap-0.5">
+              <Link
+                href={`/tracker?term=${encodeURIComponent(k)}&window=${windowHours}`}
+                className="rounded-full bg-zinc-100 px-1.5 py-0.5 text-[11px] text-zinc-500 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-400 dark:hover:bg-zinc-700"
+              >
+                {k}
+              </Link>
+              {event.heat_discovered_keywords?.includes(k) && (
+                <>
+                  <span className="rounded bg-emerald-100 px-0.5 text-[8px] font-bold text-emerald-700 dark:bg-emerald-900 dark:text-emerald-300">N</span>
+                  {onDeleteHeatWord && (
+                    <button type="button" onClick={() => onDeleteHeatWord(k)} className="text-[10px] text-zinc-300 hover:text-red-500">✕</button>
+                  )}
+                </>
+              )}
             </span>
           ))}
         </div>
@@ -855,6 +895,25 @@ export default function Home() {
     setQuery(term);
   };
 
+  const handleDeleteHeatWord = async (word: string) => {
+    try {
+      await fetch(`/api/v1/trackers/heat-words/${encodeURIComponent(word)}`, { method: "DELETE" });
+      // 乐观更新:移除该 topic + 从事件中移除
+      setTopics((prev) => prev.filter((t) => t.label !== word));
+      setEvents((prev) =>
+        prev.map((ev) => ({
+          ...ev,
+          entities: ev.entities.filter((e) => e !== word),
+          keywords: ev.keywords.filter((k) => k !== word),
+          heat_discovered_entities: ev.heat_discovered_entities?.filter((e) => e !== word),
+          heat_discovered_keywords: ev.heat_discovered_keywords?.filter((k) => k !== word),
+        }))
+      );
+    } catch {
+      // 静默失败,下次刷新会重算
+    }
+  };
+
   return (
     <main className="mx-auto w-full max-w-3xl px-4 py-8">
       <AnnouncementBar />
@@ -992,7 +1051,7 @@ export default function Home() {
               </div>
               <div className="space-y-2">
                 {events.map((event, i) => (
-                  <EventGroupCard key={i} event={event} windowHours={trackerWindow} />
+                  <EventGroupCard key={i} event={event} windowHours={trackerWindow} onDeleteHeatWord={handleDeleteHeatWord} />
                 ))}
               </div>
             </div>
@@ -1033,6 +1092,7 @@ export default function Home() {
                     topic={topic}
                     windowHours={trackerWindow}
                     onSearch={handleSearch}
+                    onDeleteHeatWord={handleDeleteHeatWord}
                   />
                 ))}
               </div>

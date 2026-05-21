@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -32,19 +33,20 @@ type trackerArticleRef struct {
 }
 
 type trackerTopic struct {
-	Label         string              `json:"label"`
-	Kind          string              `json:"kind"`
-	Score         int64               `json:"score"`
-	PrevScore     int64               `json:"prev_score"`
-	ScoreDelta    int64               `json:"score_delta"`
-	Count         int                 `json:"count"`
-	PrevCount     int                 `json:"prev_count"`
-	CountDelta    int                 `json:"count_delta"`
-	Momentum      string              `json:"momentum"`
-	Sources       []trackerSourceStat `json:"sources"`
-	RelatedTerms  []string            `json:"related_terms"`
-	Articles      []trackerArticleRef `json:"articles"`                // 关联文章(按热度排序,最多5篇)
-	SampleArticle *trackerArticleRef  `json:"sample_article,omitempty"` // 向后兼容,等前端切换后可移除
+	Label            string              `json:"label"`
+	Kind             string              `json:"kind"`
+	Score            int64               `json:"score"`
+	PrevScore        int64               `json:"prev_score"`
+	ScoreDelta       int64               `json:"score_delta"`
+	Count            int                 `json:"count"`
+	PrevCount        int                 `json:"prev_count"`
+	CountDelta       int                 `json:"count_delta"`
+	Momentum         string              `json:"momentum"`
+	Sources          []trackerSourceStat `json:"sources"`
+	RelatedTerms     []string            `json:"related_terms"`
+	Articles         []trackerArticleRef `json:"articles"`
+	IsHeatDiscovered bool                `json:"is_heat_discovered,omitempty"`
+	SampleArticle    *trackerArticleRef  `json:"sample_article,omitempty"`
 }
 
 type trackerResp struct {
@@ -55,14 +57,16 @@ type trackerResp struct {
 
 // trackerEventGroup 事件聚类结果:多篇相关文章(共享≥2个实体)合并为一个"事件"。
 type trackerEventGroup struct {
-	Title    string              `json:"title"`    // 代表标题(最高热度文章截取)
-	Entities []string            `json:"entities"` // 涉及的 entity 列表
-	Keywords []string            `json:"keywords"` // 涉及的 keyword 列表
-	Score    int64               `json:"score"`    // 组内总热度
-	Count    int                 `json:"count"`    // 相关文章数
-	Momentum string              `json:"momentum"` // 组整体趋势
-	Sources  []trackerSourceStat `json:"sources"`  // 来源分布
-	Articles []trackerArticleRef `json:"articles"` // 组内 top 文章(最多3篇)
+	Title                  string              `json:"title"`
+	Entities               []string            `json:"entities"`
+	Keywords               []string            `json:"keywords"`
+	Score                  int64               `json:"score"`
+	Count                  int                 `json:"count"`
+	Momentum               string              `json:"momentum"`
+	Sources                []trackerSourceStat `json:"sources"`
+	Articles               []trackerArticleRef `json:"articles"`
+	HeatDiscoveredEntities []string            `json:"heat_discovered_entities,omitempty"`
+	HeatDiscoveredKeywords []string            `json:"heat_discovered_keywords,omitempty"`
 }
 
 type trackerStorylineResp struct {
@@ -78,16 +82,17 @@ type trackerStorylineResp struct {
 }
 
 type trackerAccumulator struct {
-	Label         string
-	Kind          string
-	Score         int64 // 绝对热度累加(降级排序信号,snapshot 不可用时用)
-	WindowDelta   int64 // 窗口内真实热度增量累加(基于 snapshot,主排序/momentum 信号)
-	NewCount      int   // 窗口内新出现的关联文章数
-	Count         int
-	Sources       map[string]int
-	RelatedTerms  map[string]struct{}
-	SampleArticle *trackerArticleRef
-	Articles      []trackerArticleRef // 所有关联文章引用
+	Label            string
+	Kind             string
+	Score            int64 // 绝对热度累加(降级排序信号,snapshot 不可用时用)
+	WindowDelta      int64 // 窗口内真实热度增量累加(基于 snapshot,主排序/momentum 信号)
+	NewCount         int   // 窗口内新出现的关联文章数
+	Count            int
+	Sources          map[string]int
+	RelatedTerms     map[string]struct{}
+	SampleArticle    *trackerArticleRef
+	Articles         []trackerArticleRef // 所有关联文章引用
+	IsHeatDiscovered bool                // 该词是否来自热词发现(非静态词典)
 }
 
 type trackerCandidate struct {
@@ -117,6 +122,38 @@ type trackerEventArticleMeta struct {
 	publishedAt time.Time
 	entities    []string
 	keywords    []string
+}
+
+// heatBlacklistSet 热词黑名单(内存缓存,启动时从 DB 加载,删除时实时更新)。
+// 黑名单中的词不参与热词发现、不参与实体抽取、不出 topic 卡片。
+var (
+	heatBlacklistSet = map[string]struct{}{}
+	heatBlacklistMu  sync.RWMutex
+)
+
+// LoadHeatBlacklist 启动时从 DB 加载黑名单到内存。
+func LoadHeatBlacklist(words []string) {
+	heatBlacklistMu.Lock()
+	defer heatBlacklistMu.Unlock()
+	heatBlacklistSet = make(map[string]struct{}, len(words))
+	for _, w := range words {
+		heatBlacklistSet[w] = struct{}{}
+	}
+}
+
+// AddToHeatBlacklist 运行时添加词到黑名单。
+func AddToHeatBlacklist(word string) {
+	heatBlacklistMu.Lock()
+	defer heatBlacklistMu.Unlock()
+	heatBlacklistSet[word] = struct{}{}
+}
+
+// isBlacklisted 检查词是否在黑名单中。
+func isBlacklisted(word string) bool {
+	heatBlacklistMu.RLock()
+	defer heatBlacklistMu.RUnlock()
+	_, ok := heatBlacklistSet[word]
+	return ok
 }
 
 var (
@@ -652,6 +689,9 @@ func collectHeatDiscoveredWords(articles []model.Article) map[string]struct{} {
 const heatFreqThreshold = 2000
 
 func isExcludedHeatWord(word string) bool {
+	if isBlacklisted(word) {
+		return true
+	}
 	if _, ok := trackerEntityLabelSet[word]; ok {
 		return true
 	}
@@ -689,6 +729,10 @@ const topicFreqThreshold = 600
 // 规则:词典词频 > topicFreqThreshold 且不在任何白名单中 → 过滤。
 // 白名单包括:trackerEntityLabelSet / strongGeoNames / strongVerbs / strongTopicNouns。
 func isGenericTopicByFreq(label string) bool {
+	// 黑名单直接拦截
+	if isBlacklisted(label) {
+		return true
+	}
 	// 白名单豁免
 	if _, ok := trackerEntityLabelSet[label]; ok {
 		return false
@@ -777,19 +821,20 @@ func buildTrackerTopics(
 		})
 
 		items = append(items, trackerTopic{
-			Label:         acc.Label,
-			Kind:          acc.Kind,
-			Score:         acc.Score,
-			PrevScore:     0, // 已不用双窗口对比,字段保留为兼容老前端
-			ScoreDelta:    acc.WindowDelta,
-			Count:         acc.Count,
-			PrevCount:     0,
-			CountDelta:    acc.NewCount,
-			Momentum:      detectMomentum(acc.WindowDelta, acc.NewCount),
-			Sources:       flattenTrackerSources(acc.Sources),
-			RelatedTerms:  flattenTrackerTerms(acc.RelatedTerms, 4),
-			Articles:      topArticles,
-			SampleArticle: acc.SampleArticle,
+			Label:            acc.Label,
+			Kind:             acc.Kind,
+			Score:            acc.Score,
+			PrevScore:        0,
+			ScoreDelta:       acc.WindowDelta,
+			Count:            acc.Count,
+			PrevCount:        0,
+			CountDelta:       acc.NewCount,
+			Momentum:         detectMomentum(acc.WindowDelta, acc.NewCount),
+			Sources:          flattenTrackerSources(acc.Sources),
+			RelatedTerms:     flattenTrackerTerms(acc.RelatedTerms, 4),
+			Articles:         topArticles,
+			IsHeatDiscovered: acc.IsHeatDiscovered,
+			SampleArticle:    acc.SampleArticle,
 		})
 	}
 
@@ -843,6 +888,16 @@ func accumulateTrackerTopics(
 				Kind:         c.Kind,
 				Sources:      map[string]int{},
 				RelatedTerms: map[string]struct{}{},
+			}
+			// 标记是否来自热词发现:不在静态词典中的词 = 热词发现产出
+			if _, inLexicon := trackerEntityLabelSet[c.Label]; !inLexicon {
+				if _, inGeo := strongGeoNames[c.Label]; !inGeo {
+					if _, inVerb := strongVerbs[c.Label]; !inVerb {
+						if _, inTopic := strongTopicNouns[c.Label]; !inTopic {
+							acc.IsHeatDiscovered = true
+						}
+					}
+				}
 			}
 			accs[key] = acc
 		}
@@ -2746,16 +2801,35 @@ func clusterTrackerEvents(articles []model.Article, heatDiscovered map[string]st
 
 		totalScore := applySourceDiversityBoost(baseScore, len(sourceCount))
 
+		// 标记哪些实体/关键词是热词发现来的(不在静态词典中)
+		var hdEntities, hdKeywords []string
+		for _, e := range entities {
+			if _, inLexicon := trackerEntityLabelSet[e]; !inLexicon {
+				if _, inGeo := strongGeoNames[e]; !inGeo {
+					hdEntities = append(hdEntities, e)
+				}
+			}
+		}
+		for _, k := range keywords {
+			if _, inVerb := strongVerbs[k]; !inVerb {
+				if _, inTopic := strongTopicNouns[k]; !inTopic {
+					hdKeywords = append(hdKeywords, k)
+				}
+			}
+		}
+
 		sortKeys = append(sortKeys, eventSortKey{
 			group: trackerEventGroup{
-				Title:    title,
-				Entities: entities,
-				Keywords: keywords,
-				Score:    totalScore,
-				Count:    len(members),
-				Momentum: detectMomentum(windowDelta, newCount),
-				Sources:  flattenTrackerSources(sourceCount),
-				Articles: eventArticles,
+				Title:                  title,
+				Entities:               entities,
+				Keywords:               keywords,
+				Score:                  totalScore,
+				Count:                  len(members),
+				Momentum:               detectMomentum(windowDelta, newCount),
+				Sources:                flattenTrackerSources(sourceCount),
+				Articles:               eventArticles,
+				HeatDiscoveredEntities: hdEntities,
+				HeatDiscoveredKeywords: hdKeywords,
 			},
 			sourceDiversity:   len(sourceCount),
 			latestPublishedAt: latestPublishedAt,

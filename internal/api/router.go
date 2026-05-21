@@ -37,6 +37,9 @@ func NewRouter(h *Handler) http.Handler {
 		r.Get("/subscriptions", h.ListSubscriptions)
 		r.Post("/subscriptions", h.AddSubscription)
 		r.Delete("/subscriptions/{id}", h.DeleteSubscription)
+
+		// 热词黑名单管理
+		r.Delete("/trackers/heat-words/{word}", h.DeleteHeatWord)
 	})
 
 	return r

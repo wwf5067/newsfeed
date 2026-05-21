@@ -687,3 +687,30 @@ func (r *Repository) PromoteCandidates(ctx context.Context, minDays, minHits int
 	}
 	return out, rows.Err()
 }
+
+// AddHeatBlacklist 将词加入热词黑名单。
+func (r *Repository) AddHeatBlacklist(ctx context.Context, word string) error {
+	_, err := r.pool.Exec(ctx, `
+		INSERT INTO heat_blacklist (word) VALUES ($1)
+		ON CONFLICT (word) DO NOTHING
+	`, word)
+	return err
+}
+
+// ListHeatBlacklist 返回所有黑名单词。
+func (r *Repository) ListHeatBlacklist(ctx context.Context) ([]string, error) {
+	rows, err := r.pool.Query(ctx, `SELECT word FROM heat_blacklist ORDER BY created_at DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var w string
+		if err := rows.Scan(&w); err != nil {
+			return nil, err
+		}
+		out = append(out, w)
+	}
+	return out, rows.Err()
+}

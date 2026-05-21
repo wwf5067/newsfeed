@@ -44,6 +44,12 @@ func main() {
 		log.Info("loaded promoted heat candidates", "count", len(promoted))
 	}
 
+	// 启动时加载热词黑名单。
+	if blacklist, err := repo.ListHeatBlacklist(ctx); err == nil && len(blacklist) > 0 {
+		api.LoadHeatBlacklist(blacklist)
+		log.Info("loaded heat blacklist", "count", len(blacklist))
+	}
+
 	srv := &http.Server{
 		Addr:         cfg.APIAddr,
 		Handler:      api.NewRouter(handler),
