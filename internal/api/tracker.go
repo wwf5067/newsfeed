@@ -2808,7 +2808,8 @@ func clusterTrackerEvents(articles []model.Article, heatDiscovered map[string]st
 	const titleCosineThreshold = 0.14
 	const titleCosineSparseResidualThreshold = 0.05
 	const titleCosineRawFallbackThreshold = 0.18
-	// pairLinkThreshold 动态适应窗口大小:
+	// pairLinkThreshold 动态适应窗口大小,配合 weightedOverlapRatio 使长复合词共享
+	// 即可触发合并 — 短词需 2+ 共享才能达标:
 	// 小窗口(≤3h)文章池小、共现稀疏,门槛放低以提高召回;
 	// 大窗口(24h+)文章多、背景噪声高,门槛适当提高以保证精度。
 	var pairLinkThreshold float64
@@ -2900,7 +2901,9 @@ func clusterTrackerEvents(articles []model.Article, heatDiscovered map[string]st
 			}
 		}
 
-		entityOverlap := overlapRatio(signal.entities, 2)
+		// entity 用加权 overlap:长复合词(≥3 字)信号比短词强,等价饱和到 2.0
+		// (即 1 个 4 字共享 == 1.0,2 个 2 字共享 == 1.0,介于两者之间是部分分)
+		entityOverlap := weightedOverlapRatio(signal.entities, 2.0)
 		keywordOverlap := overlapRatio(signal.keywords, 2)
 		timeProximity := timeProximityScore(metas[a].publishedAt, metas[b].publishedAt)
 		sourceDiversity := 0.0
@@ -3255,6 +3258,48 @@ func overlapRatio(shared map[string]struct{}, saturateAt int) float64 {
 		return 1
 	}
 	return float64(len(shared)) / float64(saturateAt)
+}
+
+// weightedOverlapRatio 按字符长度加权的共享实体重合度。
+//
+// 设计动机:语义信号强度跟 label 长度强相关:
+//   - "普京访华"(4 字复合词)共享 → 几乎确定是同一事件
+//   - "普京"(2 字短实体)共享 → 可能不同事件偶然提到同人
+//
+// 等权 overlapRatio 把两者一视同仁,实测在小窗口(3-6h)下,事件聚合
+// 跟"普京"这种短实体连边过多,导致大事件吞噬不相关文章 / 或者长复合
+// 词共现没被给到足够权重,小事件聚不起来。
+//
+// 加权规则(线性加权,长复合词信号 ~2x):
+//   - len ≤ 2: weight = 1.0
+//   - len 3:   weight = 1.5
+//   - len 4:   weight = 2.0
+//   - len ≥ 5: weight = 2.5
+//
+// saturateWeight 是饱和点(对应"等价 N 个 2 字 entity 共享后封顶到 1.0"),
+// 默认传 saturateAt × 1.0 即可,即 N 个等权实体或等价加权。
+func weightedOverlapRatio(shared map[string]struct{}, saturateWeight float64) float64 {
+	if len(shared) == 0 || saturateWeight <= 0 {
+		return 0
+	}
+	totalWeight := 0.0
+	for label := range shared {
+		runes := []rune(label)
+		switch {
+		case len(runes) <= 2:
+			totalWeight += 1.0
+		case len(runes) == 3:
+			totalWeight += 1.5
+		case len(runes) == 4:
+			totalWeight += 2.0
+		default:
+			totalWeight += 2.5
+		}
+	}
+	if totalWeight >= saturateWeight {
+		return 1
+	}
+	return totalWeight / saturateWeight
 }
 
 func timeProximityScore(a, b time.Time) float64 {
