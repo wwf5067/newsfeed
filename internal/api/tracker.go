@@ -43,7 +43,8 @@ type trackerTopic struct {
 	Momentum      string              `json:"momentum"`
 	Sources       []trackerSourceStat `json:"sources"`
 	RelatedTerms  []string            `json:"related_terms"`
-	SampleArticle *trackerArticleRef  `json:"sample_article,omitempty"`
+	Articles      []trackerArticleRef `json:"articles"`                // 关联文章(按热度排序,最多5篇)
+	SampleArticle *trackerArticleRef  `json:"sample_article,omitempty"` // 向后兼容,等前端切换后可移除
 }
 
 type trackerResp struct {
@@ -86,6 +87,7 @@ type trackerAccumulator struct {
 	Sources       map[string]int
 	RelatedTerms  map[string]struct{}
 	SampleArticle *trackerArticleRef
+	Articles      []trackerArticleRef // 所有关联文章引用
 }
 
 type trackerCandidate struct {
@@ -725,6 +727,12 @@ func buildTrackerTopics(
 		if acc.Score == 0 {
 			continue
 		}
+		// 文章按发布时间降序(最新在前)
+		topArticles := acc.Articles
+		sort.Slice(topArticles, func(i, j int) bool {
+			return topArticles[i].PublishedAt.After(topArticles[j].PublishedAt)
+		})
+
 		items = append(items, trackerTopic{
 			Label:         acc.Label,
 			Kind:          acc.Kind,
@@ -737,6 +745,7 @@ func buildTrackerTopics(
 			Momentum:      detectMomentum(acc.WindowDelta, acc.NewCount),
 			Sources:       flattenTrackerSources(acc.Sources),
 			RelatedTerms:  flattenTrackerTerms(acc.RelatedTerms, 4),
+			Articles:      topArticles,
 			SampleArticle: acc.SampleArticle,
 		})
 	}
@@ -802,6 +811,14 @@ func accumulateTrackerTopics(
 			acc.NewCount++
 		}
 		acc.Sources[article.SourceKey]++
+		acc.Articles = append(acc.Articles, trackerArticleRef{
+			ID:          article.ID,
+			Title:       article.Title,
+			SourceKey:   article.SourceKey,
+			Heat:        article.Heat,
+			HeatValue:   article.HeatValue,
+			PublishedAt: article.PublishedAt,
+		})
 		for _, related := range c.RelatedTerms {
 			if related != acc.Label {
 				acc.RelatedTerms[related] = struct{}{}

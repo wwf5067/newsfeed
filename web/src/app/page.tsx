@@ -59,6 +59,14 @@ type TrackerTopic = {
     heat: string;
     heat_value: number;
   };
+  articles: {
+    id: number;
+    title: string;
+    source_key: string;
+    heat: string;
+    heat_value: number;
+    published_at: string;
+  }[];
 };
 
 type TrackerResp = {
@@ -313,22 +321,18 @@ function AnnouncementBar() {
 
 function TopicGroup({
   topic,
-  articles,
   windowHours,
   onSearch,
 }: {
   topic: TrackerTopic;
-  articles: Article[];
   windowHours: number;
   onSearch: (q: string) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
+  const articles = topic.articles ?? [];
   const displayArticles = expanded ? articles : articles.slice(0, 3);
   const hasMore = articles.length > 3;
-  // 用两者最大值作为展示总数：后端计数更全，但本地匹配可能因多重归属而更多
-  const displayCount = Math.max(topic.count, articles.length);
-  // 后端还有本地没拿到的文章（前端限拉300条）
-  const hasMoreOnServer = topic.count > articles.length;
+  const displayCount = topic.count;
 
   const momentumCfg: Record<string, { text: string; icon: string; cls: string }> = {
     up: { text: "升温", icon: "↗", cls: "text-emerald-600 dark:text-emerald-400" },
@@ -403,7 +407,7 @@ function TopicGroup({
       {/* 底部: 文章数 + 展开 + 查看全部 + 来源 chips */}
       <div className="flex flex-wrap items-center gap-1.5 border-t border-zinc-50 px-3 py-1.5 dark:border-zinc-800/50">
         <span className="text-[11px] text-zinc-400">
-          {displayCount > articles.length ? `${displayCount} 篇（展示 ${articles.length}）` : `${displayCount} 篇`}
+          {displayCount} 篇
         </span>
         {hasMore && (
           <button
@@ -414,7 +418,7 @@ function TopicGroup({
             {expanded ? "收起" : `+${articles.length - 3} 更多`}
           </button>
         )}
-        {hasMoreOnServer && (
+        {hasMore && (
           <Link
             href={`/tracker?term=${encodeURIComponent(topic.label)}&window=${windowHours}`}
             className="text-[11px] text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200"
@@ -792,47 +796,30 @@ export default function Home() {
   // 话题聚合分组
   //
   // 设计:一篇文章可以同时归到多个话题下(如"普京访华"既归"普京"也归"俄罗斯"
-  // 也归"中国")。早先版本用 usedIds 让"先匹配的话题独占文章",导致排在前面
-  // 的高频实体(如"中国")会把所有文章吸收,后面的实体(如"俄罗斯""普京")
-  // 看起来"没文章"被静默丢弃 — 用户在首页看不到这些实体。
-  // 现改为允许多重归属,信息更全;首页冗余文章是可接受代价(用户可以从不同
-  // 维度切入同一事件)。
+  // 直接使用后端返回的 topic.articles,不再前端匹配。
+  // 后端 buildTrackerTopics 通过 gse 分词+多层过滤精确匹配,结果可信。
   const { grouped, ungrouped } = useMemo(() => {
     if (!isTopicView || topics.length === 0) {
-      return { grouped: [] as { topic: TrackerTopic; articles: Article[] }[], ungrouped: articles };
+      return { grouped: [] as { topic: TrackerTopic }[], ungrouped: articles };
     }
 
-    // 只使用 trackerWindow 窗口内抓取的文章参与分组,
-    // 与后端 /trackers 和 /trackers/storyline 使用同一数据集,
-    // 保证首页分组结果与点进实体页后看到的内容一致。
+    const grouped: { topic: TrackerTopic }[] = [];
+    const matchedIds = new Set<number>();
+
+    for (const topic of topics) {
+      if ((topic.articles ?? []).length === 0) continue;
+      for (const a of topic.articles) {
+        matchedIds.add(a.id);
+      }
+      grouped.push({ topic });
+    }
+
+    // ungrouped: 未被任何话题匹配的文章(兜底)
     const latestPublishedMs = windowedLatestPublishedMs(articles);
     const cutoff = latestPublishedMs - trackerWindow * 3600 * 1000;
     const windowed = articles.filter((a) => {
       try { return new Date(a.published_at).getTime() >= cutoff && a.source_key !== "bilibili_popular"; } catch { return true; }
     });
-
-    const grouped: { topic: TrackerTopic; articles: Article[] }[] = [];
-    const matchedIds = new Set<number>();
-
-    for (const topic of topics) {
-      const label = topic.label.toLowerCase();
-      // 对短泛词(≤2 汉字且无英文字母,如"中国""美国")只匹配 title,
-      // 与后端 filterWeakContentMatches 保持一致,避免 content 偶然提及导致
-      // 首页把文章归入某话题、但点进实体页却看不见的不一致。
-      const titleOnly = isShortCJKTerm(label);
-      const matched = windowed.filter((a) => {
-        const titleLower = a.title.toLowerCase();
-        if (titleOnly) return titleLower.includes(label);
-        const text = (titleLower + " " + a.content.toLowerCase());
-        return text.includes(label);
-      });
-      if (matched.length === 0) continue;
-      matched.forEach((a) => matchedIds.add(a.id));
-      grouped.push({ topic, articles: matched });
-    }
-
-    // ungrouped 仍按"未被任何话题匹配"算 — 用作"其他"区块兜底(虽然该区块
-    // 已经在 commit 8399215 移除,这里保留派生避免改动 useMemo 结构)。
     const ungrouped = windowed.filter((a) => !matchedIds.has(a.id));
     return { grouped, ungrouped };
   }, [articles, topics, isTopicView, trackerWindow]);
@@ -1040,11 +1027,10 @@ export default function Home() {
                 </div>
               </div>
               <div className="space-y-4">
-                {grouped.map(({ topic, articles: topicArticles }) => (
+                {grouped.map(({ topic }) => (
                   <TopicGroup
                     key={`${topic.kind}:${topic.label}`}
                     topic={topic}
-                    articles={topicArticles}
                     windowHours={trackerWindow}
                     onSearch={handleSearch}
                   />
