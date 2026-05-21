@@ -135,9 +135,9 @@ WHERE id = $1
 // ListRecentArticles 拉最近 windowHours 小时内"首次出现"的文章,用于热点/实体聚合。
 //
 // 这里使用 published_at 而不是 fetched_at:
-// - fetched_at 会在每次抓取时刷新,会让长期在榜内容在 3h/6h/24h 都持续命中
-// - published_at 在首次写入后锁定(上榜/首次看到时间语义),更符合窗口统计预期
-//   (3h 应主要看近 3h 新进入视野的事件与实体)
+//   - fetched_at 会在每次抓取时刷新,会让长期在榜内容在 3h/6h/24h 都持续命中
+//   - published_at 在首次写入后锁定(上榜/首次看到时间语义),更符合窗口统计预期
+//     (3h 应主要看近 3h 新进入视野的事件与实体)
 func (r *Repository) ListRecentArticles(ctx context.Context, windowHours, limit int) ([]model.Article, error) {
 	if windowHours <= 0 || windowHours > 168 {
 		windowHours = 24
@@ -636,6 +636,35 @@ func (r *Repository) UpsertHeatCandidate(ctx context.Context, word, kind string,
 	return err
 }
 
+// ListAllHeatCandidates 调试用:返回所有候选词(promoted + pending)的快照。
+//
+// 跟 ListPromotedCandidates 区别:前者只列 promoted_at IS NOT NULL 的,本函数
+// 全列,方便观察"为什么 X 还没转正" — 检查 hit_days / total_hits 进度。
+func (r *Repository) ListAllHeatCandidates(ctx context.Context, limit int) ([]HeatCandidate, error) {
+	if limit <= 0 || limit > 500 {
+		limit = 200
+	}
+	rows, err := r.pool.Query(ctx, `
+		SELECT id, word, kind, hit_days, total_hits, promoted_at
+		FROM heat_candidates
+		ORDER BY total_hits DESC, hit_days DESC
+		LIMIT $1
+	`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []HeatCandidate
+	for rows.Next() {
+		var c HeatCandidate
+		if err := rows.Scan(&c.ID, &c.Word, &c.Kind, &c.HitDays, &c.TotalHits, &c.PromotedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
 // ListPromotedCandidates 返回所有已转正的候选词(启动时加载注入 gse)。
 func (r *Repository) ListPromotedCandidates(ctx context.Context) ([]HeatCandidate, error) {
 	rows, err := r.pool.Query(ctx, `
@@ -662,7 +691,9 @@ func (r *Repository) ListPromotedCandidates(ctx context.Context) ([]HeatCandidat
 
 // PromoteCandidates 将满足阈值的候选词批量转正。
 // 条件: hit_days >= minDays AND total_hits >= minHits AND promoted_at IS NULL
-//       AND word 不在 heat_blacklist(防止删除后被自动复活)。
+//
+//	AND word 不在 heat_blacklist(防止删除后被自动复活)。
+//
 // 返回转正的词列表。
 func (r *Repository) PromoteCandidates(ctx context.Context, minDays, minHits int) ([]HeatCandidate, error) {
 	rows, err := r.pool.Query(ctx, `

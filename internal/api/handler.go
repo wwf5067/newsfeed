@@ -634,11 +634,13 @@ func hasLetterASCII(s string) bool {
 	return false
 }
 
-// ListHeatWords 调试用:返回当前已转正热词 + 黑名单。
-// GET /api/v1/trackers/heat-words
+// ListHeatWords 调试用:返回当前已转正热词 + 黑名单 + pending 候选词。
+// GET /api/v1/trackers/heat-words?include_pending=1
 //
 // 主要用于 prod 排查"两字新词为何切不出来" — 直接看 promotedWordSet
 // 是不是真的注入了用户期待的词。
+// include_pending=1 时附带 heat_candidates 表全部行(promoted + pending),
+// 用于查"X 词为什么还没转正"(看 hit_days / total_hits 进度)。
 func (h *Handler) ListHeatWords(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
@@ -672,12 +674,44 @@ func (h *Handler) ListHeatWords(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{
+	resp := map[string]any{
 		"promoted":        out,
 		"promoted_count":  len(out),
 		"blacklist":       blacklist,
 		"blacklist_count": len(blacklist),
-	})
+	}
+
+	// include_pending=1 时附带候选词全表,用于查"X 词为什么还没转正"
+	if r.URL.Query().Get("include_pending") == "1" {
+		all, err := h.repo.ListAllHeatCandidates(ctx, 200)
+		if err == nil {
+			type candItem struct {
+				Word       string `json:"word"`
+				Kind       string `json:"kind"`
+				HitDays    int    `json:"hit_days"`
+				TotalHits  int    `json:"total_hits"`
+				Status     string `json:"status"` // promoted / pending
+				PromotedAt string `json:"promoted_at,omitempty"`
+			}
+			items := make([]candItem, 0, len(all))
+			for _, c := range all {
+				status := "pending"
+				ts := ""
+				if c.PromotedAt != nil {
+					status = "promoted"
+					ts = c.PromotedAt.Format(time.RFC3339)
+				}
+				items = append(items, candItem{
+					Word: c.Word, Kind: c.Kind, HitDays: c.HitDays,
+					TotalHits: c.TotalHits, Status: status, PromotedAt: ts,
+				})
+			}
+			resp["candidates_all"] = items
+			resp["candidates_total"] = len(items)
+		}
+	}
+
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // DeleteHeatWord 删除热词(加入黑名单)。
