@@ -95,6 +95,16 @@ func inferWordKind(word string) string {
 // InjectPromotedWords 运行时注入转正的候选词到 gse 和 trackerEntityLabelSet。
 // 调用时机: 服务启动时 + 每次有新转正时。
 // 线程安全: gse.AddToken 本身是线程安全的,CalcToken 需要在注入完成后调一次。
+// promotedWordSet 记录已转正的热词(参与 gse 分词)。
+// 用于前端区分"发现中"和"已转正"状态。
+var promotedWordSet = map[string]struct{}{}
+
+// IsPromotedWord 检查词是否已转正。
+func IsPromotedWord(word string) bool {
+	_, ok := promotedWordSet[word]
+	return ok
+}
+
 func InjectPromotedWords(candidates []HeatCandidate) {
 	trackerSegOnce.Do(loadTrackerSegmenter)
 	if trackerSegErr != nil {
@@ -107,6 +117,8 @@ func InjectPromotedWords(candidates []HeatCandidate) {
 		if c.Kind == "entity" {
 			trackerEntityLabelSet[c.Word] = struct{}{}
 		}
+		// 记录转正状态
+		promotedWordSet[c.Word] = struct{}{}
 	}
 	if len(candidates) > 0 {
 		trackerSeg.CalcToken()

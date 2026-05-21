@@ -45,7 +45,8 @@ type trackerTopic struct {
 	Sources          []trackerSourceStat `json:"sources"`
 	RelatedTerms     []string            `json:"related_terms"`
 	Articles         []trackerArticleRef `json:"articles"`
-	IsHeatDiscovered bool                `json:"is_heat_discovered,omitempty"`
+	IsHeatDiscovered bool                `json:"is_heat_discovered,omitempty"` // 系统自动发现(不在静态词典)
+	IsPromoted       bool                `json:"is_promoted,omitempty"`        // 已转正,参与 gse 分词
 	SampleArticle    *trackerArticleRef  `json:"sample_article,omitempty"`
 }
 
@@ -92,7 +93,8 @@ type trackerAccumulator struct {
 	RelatedTerms     map[string]struct{}
 	SampleArticle    *trackerArticleRef
 	Articles         []trackerArticleRef // 所有关联文章引用
-	IsHeatDiscovered bool                // 该词是否来自热词发现(非静态词典)
+	IsHeatDiscovered bool                // 该词是否为系统自动发现(非静态词典)
+	IsPromoted       bool                // 该词是否已转正(参与 gse 分词)
 }
 
 type trackerCandidate struct {
@@ -838,6 +840,7 @@ func buildTrackerTopics(
 			RelatedTerms:     flattenTrackerTerms(acc.RelatedTerms, 4),
 			Articles:         topArticles,
 			IsHeatDiscovered: acc.IsHeatDiscovered,
+			IsPromoted:       acc.IsPromoted,
 			SampleArticle:    acc.SampleArticle,
 		})
 	}
@@ -895,9 +898,23 @@ func accumulateTrackerTopics(
 			}
 			accs[key] = acc
 		}
-		// 标记是否来自热词发现:只有 heatDiscovered map 中的词才标记
-		if _, ok := heatDiscovered[c.Label]; ok {
-			acc.IsHeatDiscovered = true
+		// 标记是否为系统自动发现(不在任何静态词典中)。
+		// 用户可通过 ✕ 删除误判(进入黑名单)。
+		if !acc.IsHeatDiscovered {
+			if _, inLexicon := trackerEntityLabelSet[c.Label]; !inLexicon {
+				if _, inGeo := strongGeoNames[c.Label]; !inGeo {
+					if _, inVerb := strongVerbs[c.Label]; !inVerb {
+						if _, inTopic := strongTopicNouns[c.Label]; !inTopic {
+							acc.IsHeatDiscovered = true
+						}
+					}
+				}
+			}
+			// 已转正注入 gse 的词也算自动发现(只是更高阶)
+			if IsPromotedWord(c.Label) {
+				acc.IsHeatDiscovered = true
+				acc.IsPromoted = true
+			}
 		}
 
 		acc.Count++
@@ -2803,16 +2820,22 @@ func clusterTrackerEvents(articles []model.Article, heatDiscovered map[string]st
 
 		totalScore := applySourceDiversityBoost(baseScore, len(sourceCount))
 
-		// 标记哪些实体/关键词是热词发现来的
+		// 标记哪些实体/关键词是系统自动发现的(不在静态词典中)
 		var hdEntities, hdKeywords []string
 		for _, e := range entities {
-			if _, ok := heatDiscovered[e]; ok {
-				hdEntities = append(hdEntities, e)
+			if _, inLexicon := trackerEntityLabelSet[e]; !inLexicon {
+				if _, inGeo := strongGeoNames[e]; !inGeo {
+					hdEntities = append(hdEntities, e)
+				}
 			}
 		}
 		for _, k := range keywords {
-			if _, ok := heatDiscovered[k]; ok {
-				hdKeywords = append(hdKeywords, k)
+			if _, inVerb := strongVerbs[k]; !inVerb {
+				if _, inTopic := strongTopicNouns[k]; !inTopic {
+					if _, inLexicon := trackerEntityLabelSet[k]; !inLexicon {
+						hdKeywords = append(hdKeywords, k)
+					}
+				}
 			}
 		}
 

@@ -68,6 +68,7 @@ type TrackerTopic = {
     published_at: string;
   }[];
   is_heat_discovered?: boolean;
+  is_promoted?: boolean;
 };
 
 type TrackerResp = {
@@ -358,7 +359,9 @@ function TopicGroup({
             {topic.label}
           </Link>
           {topic.is_heat_discovered && (
-            <span className="rounded bg-emerald-100 px-1 py-0.5 text-[9px] font-bold uppercase text-emerald-700 dark:bg-emerald-900 dark:text-emerald-300">new</span>
+            topic.is_promoted
+              ? <span className="rounded bg-blue-100 px-1 py-0.5 text-[9px] font-bold text-blue-700 dark:bg-blue-900 dark:text-blue-300">已入库</span>
+              : <span className="rounded bg-emerald-100 px-1 py-0.5 text-[9px] font-bold uppercase text-emerald-700 dark:bg-emerald-900 dark:text-emerald-300">new</span>
           )}
           <span className={`shrink-0 text-[11px] font-medium ${m.cls}`}>{m.icon} {m.text}</span>
         </div>
