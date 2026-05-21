@@ -634,6 +634,52 @@ func hasLetterASCII(s string) bool {
 	return false
 }
 
+// ListHeatWords 调试用:返回当前已转正热词 + 黑名单。
+// GET /api/v1/trackers/heat-words
+//
+// 主要用于 prod 排查"两字新词为何切不出来" — 直接看 promotedWordSet
+// 是不是真的注入了用户期待的词。
+func (h *Handler) ListHeatWords(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+
+	promoted, err := h.repo.ListPromotedCandidates(ctx)
+	if err != nil {
+		h.logger.Error("list promoted", "err", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
+		return
+	}
+	blacklist, _ := h.repo.ListHeatBlacklist(ctx)
+
+	type promotedItem struct {
+		Word       string `json:"word"`
+		Kind       string `json:"kind"`
+		HitDays    int    `json:"hit_days"`
+		TotalHits  int    `json:"total_hits"`
+		PromotedAt string `json:"promoted_at,omitempty"`
+		InMemSet   bool   `json:"in_memory_set"` // promotedWordSet 中是否真有
+	}
+	out := make([]promotedItem, 0, len(promoted))
+	for _, p := range promoted {
+		ts := ""
+		if p.PromotedAt != nil {
+			ts = p.PromotedAt.Format(time.RFC3339)
+		}
+		out = append(out, promotedItem{
+			Word: p.Word, Kind: p.Kind, HitDays: p.HitDays,
+			TotalHits: p.TotalHits, PromotedAt: ts,
+			InMemSet: IsPromotedWord(p.Word),
+		})
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"promoted":        out,
+		"promoted_count":  len(out),
+		"blacklist":       blacklist,
+		"blacklist_count": len(blacklist),
+	})
+}
+
 // DeleteHeatWord 删除热词(加入黑名单)。
 // DELETE /api/v1/trackers/heat-words/{word}
 func (h *Handler) DeleteHeatWord(w http.ResponseWriter, r *http.Request) {
