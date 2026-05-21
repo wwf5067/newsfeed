@@ -165,6 +165,8 @@ jobs:
 
           OLD_NGINX_HASH=$(sha256sum "$APP_DIR/nginx.conf" 2>/dev/null | cut -d' ' -f1 || echo "")
 
+          # 先清空 migrations 目录,防止历次编号调整后旧文件残留导致 duplicate migration 报错
+          rm -rf "$APP_DIR/migrations"
           tar -xzf /tmp/newsfeed-bundle.tar.gz -C "$APP_DIR"
           rm -f /tmp/newsfeed-bundle.tar.gz
 
