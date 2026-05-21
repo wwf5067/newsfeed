@@ -790,6 +790,10 @@ func buildTrackerTopics(
 
 	items := make([]trackerTopic, 0, len(accs))
 	for _, acc := range accs {
+		// 黑名单最高优先级:无论词来源如何,黑名单词绝不出卡片。
+		if isBlacklisted(acc.Label) {
+			continue
+		}
 		// 超泛地名(中国/美国/欧洲 等)作为话题背景词出现频率极高,
 		// 需要更多文章支撑才能上榜,避免稀释真正的热点。
 		const broadGeoMinCount = 5
@@ -2755,15 +2759,19 @@ func clusterTrackerEvents(articles []model.Article, heatDiscovered map[string]st
 		}
 		title := truncateTitleAtWordBoundary(metas[titleIdx].title, 25)
 
-		// 实体/关键词列表 — 排序保证输出稳定
+		// 实体/关键词列表 — 排序保证输出稳定,过滤黑名单词
 		entities := make([]string, 0, len(entitySet))
 		for e := range entitySet {
-			entities = append(entities, e)
+			if !isBlacklisted(e) {
+				entities = append(entities, e)
+			}
 		}
 		sort.Strings(entities)
 		keywords := make([]string, 0, len(keywordSet))
 		for k := range keywordSet {
-			keywords = append(keywords, k)
+			if !isBlacklisted(k) {
+				keywords = append(keywords, k)
+			}
 		}
 		sort.Strings(keywords)
 
