@@ -78,11 +78,14 @@ func NewRunner(
 }
 
 // Register 注册一个 Source 到调度器。
-// 使用最细粒度(15 分钟)作为基础 cron,通过 shouldRunAtHour 动态决定是否执行。
+// 各源错开 3 分钟调度,避免所有源同一时刻扎堆抓取。
+// 效果:5 个源每隔 ~3 分钟就有一个在抓,用户随时刷新都有新数据。
 func (r *Runner) Register(s Source) error {
-	// 用 15 分钟固定间隔替代 source 自带的 schedule。
-	// 实际执行与否由 shouldRunThisTick 在 runOnce 里判定。
-	_, err := r.cron.AddFunc("0 */15 * * * *", func() {
+	// 根据已注册源的数量计算分钟偏移:0, 3, 6, 9, 12
+	offset := len(r.sources) * 3
+	// cron 表达式:每 15 分钟为基础,加上偏移。例如 offset=3 → 在 :03, :18, :33, :48 执行
+	cronExpr := fmt.Sprintf("0 %d/15 * * * *", offset)
+	_, err := r.cron.AddFunc(cronExpr, func() {
 		r.runOnce(s)
 	})
 	if err != nil {
@@ -448,27 +451,22 @@ func (r *Runner) runDigestJob() {
 //
 // 策略(上海时区):
 //
-//	09:00-12:00 → 每 15 分钟(所有 tick 都执行)
-//	12:00-18:00 → 每 30 分钟(只在 :00 和 :30 执行)
-//	18:00-24:00 → 每 30 分钟(只在 :00 和 :30 执行)
-//	00:00-09:00 → 每 60 分钟(只在 :00 执行)
+//	09:00-24:00 → 每 15 分钟(全天活跃时段,热搜变化快)
+//	00:00-09:00 → 每 30 分钟(凌晨低频但不至于漏国际新闻)
 //
-// 每日预估请求量: 知乎 12+12+12+9 = 45 次(vs 原来 48 次,总量差不多但分布更合理)
+// 每日预估请求量: 每源 15*4 + 9*2 = 78 次,对免费 API 无压力。
 func (r *Runner) shouldRunThisTick(sourceKey string) bool {
 	now := time.Now()
 	hour := now.Hour()
 	minute := now.Minute()
 
 	switch {
-	case hour >= 9 && hour < 12:
-		// 黄金时段:每 15 分钟,全部执行
+	case hour >= 9:
+		// 白天+晚间(9:00-24:00):每 15 分钟,全部执行
 		return true
-	case hour >= 12 && hour < 24:
-		// 白天+晚间:每 30 分钟,只在 :00 和 :30 执行
-		return minute < 15 || (minute >= 30 && minute < 45)
 	default:
-		// 凌晨 0:00-9:00:每 60 分钟,只在 :00 执行
-		return minute < 15
+		// 凌晨 0:00-9:00:每 30 分钟,在 :00 和 :30 执行
+		return minute < 15 || (minute >= 30 && minute < 45)
 	}
 }
 
