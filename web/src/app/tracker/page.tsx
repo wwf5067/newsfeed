@@ -21,12 +21,14 @@ type TrackerStorylineResp = {
     source_key: string;
     heat: string;
     heat_value: number;
-    published_at: string; // 后端返回的 ISO 时间,前端按本地时区分组
+    published_at: string;
   }[];
   momentum: "up" | "flat" | "down";
   score_delta: number;
-  new_count: number; // 窗口内新出现的文章数,用于 chip 展示"新增 N 条"
+  new_count: number;
   total_articles: number;
+  is_heat_discovered?: boolean;
+  is_promoted?: boolean;
 };
 
 type RelatedTrackerResp = {
@@ -330,7 +332,27 @@ function TrackerPageContent() {
       <section className="rounded-xl border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
         <div className="mb-6 flex flex-wrap items-start justify-between gap-4">
           <div>
-            <h1 className="text-2xl font-semibold text-zinc-900 dark:text-zinc-100">{data.term}</h1>
+            <div className="flex items-center gap-2">
+              <h1 className="text-2xl font-semibold text-zinc-900 dark:text-zinc-100">{data.term}</h1>
+              {data.is_heat_discovered && (
+                data.is_promoted
+                  ? <span className="rounded bg-blue-100 px-1.5 py-0.5 text-[10px] font-bold text-blue-700 dark:bg-blue-900 dark:text-blue-300">已入库</span>
+                  : <span className="rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] font-bold uppercase text-emerald-700 dark:bg-emerald-900 dark:text-emerald-300">new</span>
+              )}
+              {data.is_heat_discovered && (
+                <button
+                  type="button"
+                  onClick={async () => {
+                    await fetch(`/api/v1/trackers/heat-words/${encodeURIComponent(data.term)}`, { method: "DELETE" });
+                    router.push("/");
+                  }}
+                  className="rounded px-1.5 py-0.5 text-[11px] text-zinc-400 hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-950 dark:hover:text-red-400"
+                  title="移除此热词并加入黑名单"
+                >
+                  ✕ 移除
+                </button>
+              )}
+            </div>
             <p className="mt-1 text-sm text-zinc-500">
               {windowLabel(data.window.hours)}内,共 {data.total_articles} 条相关文章
             </p>

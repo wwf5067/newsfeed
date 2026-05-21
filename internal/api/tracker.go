@@ -71,15 +71,17 @@ type trackerEventGroup struct {
 }
 
 type trackerStorylineResp struct {
-	Term          string              `json:"term"`
-	Window        trackerWindow       `json:"window"`
-	Summary       []string            `json:"summary"`
-	Sources       []trackerSourceStat `json:"sources"`
-	Items         []trackerArticleRef `json:"items"`
-	Momentum      string              `json:"momentum"`
-	ScoreDelta    int64               `json:"score_delta"` // 窗口内真实热度净增(基于 snapshot,跟 window 对齐)
-	NewCount      int                 `json:"new_count"`   // 窗口内新出现的文章数(baseline snapshot 不存在)
-	TotalArticles int                 `json:"total_articles"`
+	Term             string              `json:"term"`
+	Window           trackerWindow       `json:"window"`
+	Summary          []string            `json:"summary"`
+	Sources          []trackerSourceStat `json:"sources"`
+	Items            []trackerArticleRef `json:"items"`
+	Momentum         string              `json:"momentum"`
+	ScoreDelta       int64               `json:"score_delta"`
+	NewCount         int                 `json:"new_count"`
+	TotalArticles    int                 `json:"total_articles"`
+	IsHeatDiscovered bool                `json:"is_heat_discovered,omitempty"`
+	IsPromoted       bool                `json:"is_promoted,omitempty"`
 }
 
 type trackerAccumulator struct {
@@ -3242,16 +3244,35 @@ func buildTrackerStoryline(
 	summary := buildTrackerSummary(term, articles, windowHours)
 	momentum := detectMomentum(scoreDelta, newCount)
 
+	// 判断该 term 是否为系统自动发现/已转正
+	isHeatDiscovered := false
+	isPromoted := IsPromotedWord(term)
+	if isPromoted {
+		isHeatDiscovered = true
+	} else {
+		if _, inLexicon := trackerEntityLabelSet[term]; !inLexicon {
+			if _, inGeo := strongGeoNames[term]; !inGeo {
+				if _, inVerb := strongVerbs[term]; !inVerb {
+					if _, inTopic := strongTopicNouns[term]; !inTopic {
+						isHeatDiscovered = true
+					}
+				}
+			}
+		}
+	}
+
 	return trackerStorylineResp{
-		Term:          term,
-		Window:        trackerWindow{Hours: windowHours},
-		Summary:       summary,
-		Sources:       flattenTrackerSources(sources),
-		Items:         items,
-		Momentum:      momentum,
-		ScoreDelta:    scoreDelta,
-		NewCount:      newCount,
-		TotalArticles: len(items),
+		Term:             term,
+		Window:           trackerWindow{Hours: windowHours},
+		Summary:          summary,
+		Sources:          flattenTrackerSources(sources),
+		Items:            items,
+		Momentum:         momentum,
+		ScoreDelta:       scoreDelta,
+		NewCount:         newCount,
+		TotalArticles:    len(items),
+		IsHeatDiscovered: isHeatDiscovered,
+		IsPromoted:       isPromoted,
 	}
 }
 
