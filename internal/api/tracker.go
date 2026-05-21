@@ -2396,6 +2396,9 @@ func collectTrackerRelatedTerms(tokens []string, label string) []string {
 		if token == "" || token == label {
 			continue
 		}
+		if isBlacklisted(token) {
+			continue
+		}
 		if !shouldKeepTrackerToken(token) {
 			continue
 		}
@@ -3297,6 +3300,9 @@ func flattenTrackerSources(in map[string]int) []trackerSourceStat {
 func flattenTrackerTerms(in map[string]struct{}, limit int) []string {
 	out := make([]string, 0, len(in))
 	for term := range in {
+		if isBlacklisted(term) {
+			continue
+		}
 		out = append(out, term)
 	}
 	sort.Strings(out)
@@ -3311,6 +3317,9 @@ func flattenTrackerTerms(in map[string]struct{}, limit int) []string {
 // 不在任何已知集合中的词才被认为是"系统发现词"。
 func splitHeatDiscoveredTerms(terms []string) (promoted, discovered []string) {
 	for _, t := range terms {
+		if isBlacklisted(t) {
+			continue
+		}
 		if IsPromotedWord(t) {
 			promoted = append(promoted, t)
 		} else if _, inLexicon := trackerEntityLabelSet[t]; !inLexicon {
