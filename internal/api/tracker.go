@@ -228,6 +228,9 @@ var (
 		"或": {}, "而": {}, "若": {}, "未": {}, "只": {},
 		"即": {}, "比": {}, "如": {}, "至": {}, "自": {},
 		"以": {}, "在": {}, "从": {}, "对": {}, "且": {},
+		// 情态动词/副词:作为 bigram/trigram 组件时几乎不构成话题词
+		// "仍":纯副词,永远不作姓氏;"要":情态动词,拼合只产生叙述碎片(如"感慨要好好""元感慨要")
+		"仍": {}, "要": {},
 		// 套话/问句独立成段时直接命中(trim 路径之外的兜底)
 		"如何评价": {}, "怎么评价": {}, "怎么看": {}, "如何看待": {},
 		"哪些信息": {}, "哪些相关方": {}, "该负责": {},
@@ -258,15 +261,16 @@ var (
 		"消息": {},
 		// 人物角色泛称 — 不具追踪价值,事件主体应为具体人名/机构名
 		"当事人": {}, "受害者": {}, "嫌疑人": {}, "遇难者": {},
-		"市民": {}, "居民": {},
+		"市民": {}, "居民": {}, "老人": {},
 		// 时间修饰词 — 与"今天"/"昨天"同类
 		"当天": {}, "当日": {}, "当晚": {}, "近日": {},
 		// 数量修饰词 — 与"多人"同类
-		"多名": {}, "一名": {}, "数名": {},
+		"多名": {}, "一名": {}, "数名": {}, "一句": {},
 		// 事件类型泛称 — 太宽泛,不具追踪价值
 		"案件": {}, "事故": {}, "纠纷": {}, "风波": {},
 		// 场景/时点词 — 在标题中极常见但指向性为零
 		"事发": {},
+
 		// 机构泛称复合词 — 单独成词无指向性
 		"相关部门": {},
 	}
@@ -742,6 +746,10 @@ func collectHeatDiscoveredWordsWithParams(articles []model.Article, p HeatDiscov
 				if _, ok := stopTokens[right]; ok {
 					continue
 				}
+				// 右端为纯动词(v)→ 事件叙述碎片(如"进店""求救"),不是话题词。
+				if isVerbComponent(right) {
+					continue
+				}
 				bigram := left + right
 				bigramHanLen := hanRuneCount(bigram)
 				// bigram 汉字长度在 [minHanLen, maxBigramHanLen] 范围内
@@ -788,6 +796,10 @@ func collectHeatDiscoveredWordsWithParams(articles []model.Article, p HeatDiscov
 					continue
 				}
 				if _, ok := stopTokens[right]; ok {
+					continue
+				}
+				// 右端为纯动词(v)→ 事件叙述碎片,不是话题词(同 bigram 逻辑)。
+				if isVerbComponent(right) {
 					continue
 				}
 				trigram := left + mid + right

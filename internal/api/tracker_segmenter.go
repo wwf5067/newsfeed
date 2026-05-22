@@ -150,6 +150,27 @@ func InjectPromotedWords(candidates []HeatCandidate) {
 	}
 }
 
+// isVerbComponent 返回 true 当词被 gse 标注为纯动词(pos=="v")。
+//
+// 用于 bigram/trigram 右端组件过滤:以动词结尾的合成词通常是事件叙述碎片
+// (如"进店""求救""死亡"),而非可作为话题词的复合实体。
+//
+// 注意:vn(动名词)不在此列,保留"中毒""发现"等灵活性。
+// 判断优先取与 word 完全匹配的 segment;找不到时 fallback 到最后一个 segment。
+func isVerbComponent(word string) bool {
+	segs := posSegmentTitle(word)
+	if len(segs) == 0 {
+		return false
+	}
+	for _, seg := range segs {
+		if strings.TrimSpace(seg.Text) == strings.TrimSpace(word) {
+			return seg.Pos == "v"
+		}
+	}
+	// fallback:多字组合时取结尾片段词性
+	return segs[len(segs)-1].Pos == "v"
+}
+
 // RemovePromotedWord 从运行时词典中移除已转正的热词,用于黑名单删除时立即生效。
 // 注意: gse 不支持动态删词,分词器可能仍会切出该词;但移除 trackerEntityLabelSet
 // 后 shouldKeepTrackerToken 不再保留它,移除 promotedWordSet 后 IsPromotedWord
