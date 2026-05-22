@@ -186,10 +186,11 @@ var (
 	// 拽出来作为 entity 强候选,让用户能看到"X院士"这种事件主体。
 	// 允许 1-5 字汉字人名:覆盖单字姓("李院士")和复合姓名("欧阳振华教授")。
 	honorificRegex = regexp.MustCompile(`[\p{Han}]{1,5}(院士|教授|总裁|董事长|市长|省长|部长)`)
-	// productModelRegex 提取"中文品牌+大写型号代码"复合词(小鹏GX / 小米YU7 / 蔚来ET5)。
-	// gse 常把品牌和型号切开;AhoCorasick 只能命中词典里精确注册的型号。
-	// 这里扫描原始标题,兜底所有"2-4字汉字+1大写字母+0-4位大写字母/数字"模式。
-	productModelRegex = regexp.MustCompile(`[\p{Han}]{2,4}[A-Z][A-Z0-9]{0,4}`)
+	// productModelCodeRegex 匹配型号代码右端:"首字母大写 + 0-4位大写字母/数字",总长 1-5 字符。
+	// 例:GX / YU7 / ET5 / GT / Pro(ProMax 不在此列,因为含小写)。
+	// 配合 gse token 对扫描,左端要求 2-4 纯汉字品牌名,避免原始标题正则的跨词误命中
+	// (如"挑战特斯拉Model Y"旧正则误产"战特斯拉M")。
+	productModelCodeRegex = regexp.MustCompile(`^[A-Z][A-Z0-9]{0,4}$`)
 	stopTokens        = map[string]struct{}{
 		"这个": {}, "那个": {}, "一个": {}, "一次": {}, "一些": {}, "一种": {},
 		"我们": {}, "你们": {}, "他们": {}, "大家": {}, "自己": {}, "别人": {},
@@ -1360,20 +1361,6 @@ func extractTrackerCandidates(article model.Article, heatDiscovered map[string]s
 		}
 	}
 
-	// 0.8. 产品型号复合词扫描:"中文品牌+大写型号"模式(小鹏GX/小米YU7/蔚来ET5)。
-	//      gse 通常把品牌和型号切开(["小鹏","GX"]),AhoCorasick 只命中词典里精确
-	//      注册的型号 — 两者都需要人工维护词典条目才能识别新车型。
-	//      此步骤直接在原始标题上正则扫描,兜底一切"2-4字汉字+首大写+0-4位大写/数字"
-	//      组合,无需词典枚举每个型号。
-	for _, m := range productModelRegex.FindAllString(title, -1) {
-		normalized := canonicalizeTrackerToken(m)
-		if normalized == "" {
-			continue
-		}
-		forcedEntities[normalized] = struct{}{}
-		appendTrackerPool(&ordered, poolSeen, normalized)
-	}
-
 	// 1. 词典扫描:整段标题不区分大小写匹配 lexicon 别名,优先级最高。
 	collectTrackerLexiconMatches(title, &ordered, poolSeen)
 
@@ -1382,6 +1369,29 @@ func extractTrackerCandidates(article model.Article, heatDiscovered map[string]s
 	//    注意:用 normalizeLexiconAlias(轻量 trim)而非 normalizeTrackerToken(会 weak 过滤),
 	//    否则 weak 词(如"总冠军"3字)在统计阶段就被消灭,永远无法触发重复检测。
 	gseTokens := segmentTitle(title)
+
+	// 0.8. 产品型号复合词扫描:gse token 对扫描,避免原始标题正则的跨词误命中
+	//      (如"挑战特斯拉Model Y"旧正则误产"战特斯拉M":gse 将"特斯拉"与"Model"切开,
+	//      且 gse 会把"model"转小写,不命中全大写要求)。
+	// 要求:左端 2-4 纯汉字(品牌名如"小鹏"/"小米"/"蔚来"),
+	//       右端全大写字母/数字 1-5 字符(型号代码如 GX/YU7/ET5/GT/SUV)。
+	for i := 0; i+1 < len(gseTokens); i++ {
+		left, right := gseTokens[i], gseTokens[i+1]
+		leftRunes := []rune(left)
+		if len(leftRunes) < 2 || len(leftRunes) > 4 || !isPureHan(left) {
+			continue
+		}
+		if productModelCodeRegex.MatchString(right) {
+			combined := left + right
+			normalized := canonicalizeTrackerToken(combined)
+			if normalized == "" {
+				continue
+			}
+			forcedEntities[normalized] = struct{}{}
+			appendTrackerPool(&ordered, poolSeen, normalized)
+		}
+	}
+
 	{
 		freq := map[string]int{}
 		for _, tok := range gseTokens {
