@@ -338,9 +338,12 @@ function TopicGroup({
   onSearch: (q: string) => void;
   onDeleteHeatWord?: (word: string) => void;
 }) {
-  const [expanded, setExpanded] = useState(false);
+  // 卡片整体折叠开关:默认折叠,点 header 切换。
+  const [open, setOpen] = useState(false);
+  // 文章列表展开(默认 3 条 → 全量),仅在 open=true 时有意义。
+  const [articlesExpanded, setArticlesExpanded] = useState(false);
   const articles = topic.articles ?? [];
-  const displayArticles = expanded ? articles : articles.slice(0, 3);
+  const displayArticles = articlesExpanded ? articles : articles.slice(0, 3);
   const hasMore = articles.length > 3;
   const displayCount = topic.count;
 
@@ -353,11 +356,16 @@ function TopicGroup({
 
   return (
     <section className="rounded-lg border border-zinc-200 bg-white shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
-      {/* 话题头: px-3 py-2.5 与事件卡片保持一致 */}
-      <div className="flex items-center gap-2 px-3 py-2.5">
+      {/* 话题头(整行可点切换折叠) */}
+      <div
+        className="flex items-center gap-2 px-3 py-2.5 cursor-pointer select-none"
+        onClick={() => setOpen((v) => !v)}
+      >
         <div className="flex min-w-0 flex-1 items-center gap-2">
+          {/* 标签(label)是个 Link;阻止冒泡避免点 label 时折叠卡片 */}
           <Link
             href={`/tracker?term=${encodeURIComponent(topic.label)}&window=${windowHours}`}
+            onClick={(e) => e.stopPropagation()}
             className="text-[14px] font-semibold leading-snug text-zinc-900 hover:text-amber-700 dark:text-zinc-100 dark:hover:text-amber-300"
           >
             {topic.label}
@@ -375,219 +383,235 @@ function TopicGroup({
         {topic.is_heat_discovered && onDeleteHeatWord && (
           <button
             type="button"
-            onClick={() => onDeleteHeatWord(topic.label)}
+            onClick={(e) => { e.stopPropagation(); onDeleteHeatWord(topic.label); }}
             className="shrink-0 text-[11px] text-zinc-300 hover:text-red-500 dark:text-zinc-600 dark:hover:text-red-400"
             title="移除此热词"
           >
             ✕
           </button>
         )}
+        <span className="shrink-0 text-[10px] text-zinc-400">{open ? "▴" : `▾ ${displayCount}`}</span>
       </div>
 
-      {/* 关联词 chips + 时间线链接: 与事件卡片实体行保持一致 */}
-      {topic.related_terms.length > 0 && (
-        <div className="flex flex-wrap items-center gap-1 border-t border-zinc-50 px-3 py-1.5 dark:border-zinc-800/50">
-          {topic.related_terms.slice(0, 5).map((term) => {
-            const isPromoted = topic.promoted_terms?.includes(term);
-            const isDiscovered = !isPromoted && topic.heat_discovered_terms?.includes(term);
-            const isHd = isPromoted || isDiscovered;
-            return (
-              <span key={term} className="inline-flex items-center gap-0.5">
-                <button
-                  type="button"
-                  onClick={() => onSearch(term)}
-                  className="rounded-full bg-amber-50 px-1.5 py-0.5 text-[11px] font-medium text-amber-700 hover:bg-amber-100 dark:bg-amber-950 dark:text-amber-300 dark:hover:bg-amber-900"
-                >
-                  {term}
-                </button>
-                {isPromoted && (
-                  <span className="rounded bg-emerald-100 px-0.5 text-[8px] font-bold text-emerald-700 dark:bg-emerald-900 dark:text-emerald-300">N</span>
-                )}
-                {isDiscovered && (
-                  <span className="rounded bg-blue-100 px-0.5 text-[8px] font-bold text-blue-700 dark:bg-blue-900 dark:text-blue-300">N</span>
-                )}
-                {isHd && onDeleteHeatWord && (
-                  <button type="button" onClick={() => onDeleteHeatWord(term)} className="text-[10px] text-zinc-300 hover:text-red-500">✕</button>
-                )}
-              </span>
-            );
-          })}
-          <Link
-            href={`/tracker?term=${encodeURIComponent(topic.label)}&window=${windowHours}`}
-            className="ml-auto shrink-0 text-[11px] text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200"
-          >
-            时间线 →
-          </Link>
-        </div>
-      )}
+      {open && (
+        <>
+          {/* 关联词 chips + 时间线链接 */}
+          {topic.related_terms.length > 0 && (
+            <div className="flex flex-wrap items-center gap-1 border-t border-zinc-50 px-3 py-1.5 dark:border-zinc-800/50">
+              {topic.related_terms.slice(0, 5).map((term) => {
+                const isPromoted = topic.promoted_terms?.includes(term);
+                const isDiscovered = !isPromoted && topic.heat_discovered_terms?.includes(term);
+                const isHd = isPromoted || isDiscovered;
+                return (
+                  <span key={term} className="inline-flex items-center gap-0.5">
+                    <button
+                      type="button"
+                      onClick={() => onSearch(term)}
+                      className="rounded-full bg-amber-50 px-1.5 py-0.5 text-[11px] font-medium text-amber-700 hover:bg-amber-100 dark:bg-amber-950 dark:text-amber-300 dark:hover:bg-amber-900"
+                    >
+                      {term}
+                    </button>
+                    {isPromoted && (
+                      <span className="rounded bg-emerald-100 px-0.5 text-[8px] font-bold text-emerald-700 dark:bg-emerald-900 dark:text-emerald-300">N</span>
+                    )}
+                    {isDiscovered && (
+                      <span className="rounded bg-blue-100 px-0.5 text-[8px] font-bold text-blue-700 dark:bg-blue-900 dark:text-blue-300">N</span>
+                    )}
+                    {isHd && onDeleteHeatWord && (
+                      <button type="button" onClick={() => onDeleteHeatWord(term)} className="text-[10px] text-zinc-300 hover:text-red-500">✕</button>
+                    )}
+                  </span>
+                );
+              })}
+              <Link
+                href={`/tracker?term=${encodeURIComponent(topic.label)}&window=${windowHours}`}
+                className="ml-auto shrink-0 text-[11px] text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200"
+              >
+                时间线 →
+              </Link>
+            </div>
+          )}
 
-      {/* 文章列表: px-3 py-2 text-[13px] 与事件卡片文章行保持一致 */}
-      <div className="border-t border-zinc-50 dark:border-zinc-800/50">
-        {displayArticles.map((a) => (
-          <Link
-            key={a.id}
-            href={`/article?id=${a.id}`}
-            className="flex items-center gap-2 border-b border-zinc-50 px-3 py-2 transition last:border-b-0 hover:bg-zinc-50 dark:border-zinc-800/50 dark:hover:bg-zinc-800/50"
-          >
-            <span className="min-w-0 flex-1 truncate text-[13px] text-zinc-700 dark:text-zinc-300">
-              {a.title}
+          {/* 文章列表 */}
+          <div className="border-t border-zinc-50 dark:border-zinc-800/50">
+            {displayArticles.map((a) => (
+              <Link
+                key={a.id}
+                href={`/article?id=${a.id}`}
+                className="flex items-center gap-2 border-b border-zinc-50 px-3 py-2 transition last:border-b-0 hover:bg-zinc-50 dark:border-zinc-800/50 dark:hover:bg-zinc-800/50"
+              >
+                <span className="min-w-0 flex-1 truncate text-[13px] text-zinc-700 dark:text-zinc-300">
+                  {a.title}
+                </span>
+                <span className="shrink-0 text-[10px] text-zinc-400">
+                  {SOURCE_LABELS[a.source_key] ?? a.source_key}
+                </span>
+                {(a.heat || a.heat_value > 0) && (
+                  <span className="shrink-0 text-[10px] font-medium tabular-nums text-red-500 dark:text-red-400">
+                    {a.heat || formatHeat(a.heat_value)}
+                  </span>
+                )}
+              </Link>
+            ))}
+          </div>
+
+          {/* 底部 */}
+          <div className="flex flex-wrap items-center gap-1.5 border-t border-zinc-50 px-3 py-1.5 dark:border-zinc-800/50">
+            <span className="text-[11px] text-zinc-400">
+              {displayCount} 篇
             </span>
-            <span className="shrink-0 text-[10px] text-zinc-400">
-              {SOURCE_LABELS[a.source_key] ?? a.source_key}
-            </span>
-            {(a.heat || a.heat_value > 0) && (
-              <span className="shrink-0 text-[10px] font-medium tabular-nums text-red-500 dark:text-red-400">
-                {a.heat || formatHeat(a.heat_value)}
-              </span>
+            {hasMore && (
+              <button
+                type="button"
+                onClick={() => setArticlesExpanded((v) => !v)}
+                className="text-[11px] text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100"
+              >
+                {articlesExpanded ? "收起" : `+${articles.length - 3} 更多`}
+              </button>
             )}
-          </Link>
-        ))}
-      </div>
-
-      {/* 底部: 文章数 + 展开 + 查看全部 + 来源 chips */}
-      <div className="flex flex-wrap items-center gap-1.5 border-t border-zinc-50 px-3 py-1.5 dark:border-zinc-800/50">
-        <span className="text-[11px] text-zinc-400">
-          {displayCount} 篇
-        </span>
-        {hasMore && (
-          <button
-            type="button"
-            onClick={() => setExpanded((v) => !v)}
-            className="text-[11px] text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100"
-          >
-            {expanded ? "收起" : `+${articles.length - 3} 更多`}
-          </button>
-        )}
-        {hasMore && (
-          <Link
-            href={`/tracker?term=${encodeURIComponent(topic.label)}&window=${windowHours}`}
-            className="text-[11px] text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200"
-          >
-            查看全部 →
-          </Link>
-        )}
-        {topic.sources?.map((s) => (
-          <span
-            key={s.source_key}
-            className="rounded bg-zinc-100 px-1.5 py-0.5 text-[10px] text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400"
-          >
-            {SOURCE_LABELS[s.source_key] ?? s.source_key}&nbsp;{s.count}
-          </span>
-        ))}
-      </div>
+            {hasMore && (
+              <Link
+                href={`/tracker?term=${encodeURIComponent(topic.label)}&window=${windowHours}`}
+                className="text-[11px] text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200"
+              >
+                查看全部 →
+              </Link>
+            )}
+            {topic.sources?.map((s) => (
+              <span
+                key={s.source_key}
+                className="rounded bg-zinc-100 px-1.5 py-0.5 text-[10px] text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400"
+              >
+                {SOURCE_LABELS[s.source_key] ?? s.source_key}&nbsp;{s.count}
+              </span>
+            ))}
+          </div>
+        </>
+      )}
     </section>
   );
 }
 
 function EventGroupCard({ event, windowHours, onDeleteHeatWord }: { event: TrackerEventGroup; windowHours: number; onDeleteHeatWord?: (word: string) => void }) {
-  const [expanded, setExpanded] = useState(false);
-  const displayArticles = expanded ? event.articles : event.articles.slice(0, 3);
+  // 整张卡片默认折叠,只显示标题 + 热度行;点标题展开看实体/关键词/文章列表/来源 chips
+  const [open, setOpen] = useState(false);
+  // 文章数展开(展开后才有意义,默认 3 条 → 全量)
+  const [articlesExpanded, setArticlesExpanded] = useState(false);
+  const displayArticles = articlesExpanded ? event.articles : event.articles.slice(0, 3);
   const hasMore = event.articles.length > 3;
 
   return (
     <div className="rounded-lg border border-zinc-200 bg-white shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
-      {/* 事件标题 + 热度 */}
-      <div className="flex items-center gap-2 px-3 py-2.5">
+      {/* 事件标题 + 热度 + 折叠图标(整行点击切换) */}
+      <div
+        className="flex items-center gap-2 px-3 py-2.5 cursor-pointer select-none"
+        onClick={() => setOpen((v) => !v)}
+      >
         <h3 className="min-w-0 flex-1 text-[14px] font-semibold leading-snug text-zinc-900 dark:text-zinc-100">{event.title}</h3>
         <span className="shrink-0 text-xs font-medium tabular-nums text-emerald-600 dark:text-emerald-400">
           {formatHeat(event.score)}
         </span>
+        <span className="shrink-0 text-[10px] text-zinc-400">{open ? "▴" : `▾ ${event.count}`}</span>
       </div>
-      {/* 实体 / 关键词 chips */}
-      {(event.entities.length > 0 || event.keywords.length > 0) && (
-        <div className="flex flex-wrap gap-1 border-t border-zinc-50 px-3 py-1.5 dark:border-zinc-800/50">
-          {event.entities.map((e) => (
-            <span key={e} className="inline-flex items-center gap-0.5">
-              <Link
-                href={`/tracker?term=${encodeURIComponent(e)}&window=${windowHours}`}
-                className="rounded-full bg-amber-50 px-1.5 py-0.5 text-[11px] font-medium text-amber-700 hover:bg-amber-100 dark:bg-amber-950 dark:text-amber-300 dark:hover:bg-amber-900"
-              >
-                {e}
-              </Link>
-              {event.promoted_entities?.includes(e) && (
-                <>
-                  <span className="rounded bg-emerald-100 px-0.5 text-[8px] font-bold text-emerald-700 dark:bg-emerald-900 dark:text-emerald-300">N</span>
-                  {onDeleteHeatWord && (
-                    <button type="button" onClick={() => onDeleteHeatWord(e)} className="text-[10px] text-zinc-300 hover:text-red-500">✕</button>
+      {open && (
+        <>
+          {/* 实体 / 关键词 chips */}
+          {(event.entities.length > 0 || event.keywords.length > 0) && (
+            <div className="flex flex-wrap gap-1 border-t border-zinc-50 px-3 py-1.5 dark:border-zinc-800/50">
+              {event.entities.map((e) => (
+                <span key={e} className="inline-flex items-center gap-0.5">
+                  <Link
+                    href={`/tracker?term=${encodeURIComponent(e)}&window=${windowHours}`}
+                    className="rounded-full bg-amber-50 px-1.5 py-0.5 text-[11px] font-medium text-amber-700 hover:bg-amber-100 dark:bg-amber-950 dark:text-amber-300 dark:hover:bg-amber-900"
+                  >
+                    {e}
+                  </Link>
+                  {event.promoted_entities?.includes(e) && (
+                    <>
+                      <span className="rounded bg-emerald-100 px-0.5 text-[8px] font-bold text-emerald-700 dark:bg-emerald-900 dark:text-emerald-300">N</span>
+                      {onDeleteHeatWord && (
+                        <button type="button" onClick={() => onDeleteHeatWord(e)} className="text-[10px] text-zinc-300 hover:text-red-500">✕</button>
+                      )}
+                    </>
                   )}
-                </>
-              )}
-              {event.heat_discovered_entities?.includes(e) && (
-                <>
-                  <span className="rounded bg-blue-100 px-0.5 text-[8px] font-bold text-blue-700 dark:bg-blue-900 dark:text-blue-300">N</span>
-                  {onDeleteHeatWord && (
-                    <button type="button" onClick={() => onDeleteHeatWord(e)} className="text-[10px] text-zinc-300 hover:text-red-500">✕</button>
+                  {event.heat_discovered_entities?.includes(e) && (
+                    <>
+                      <span className="rounded bg-blue-100 px-0.5 text-[8px] font-bold text-blue-700 dark:bg-blue-900 dark:text-blue-300">N</span>
+                      {onDeleteHeatWord && (
+                        <button type="button" onClick={() => onDeleteHeatWord(e)} className="text-[10px] text-zinc-300 hover:text-red-500">✕</button>
+                      )}
+                    </>
                   )}
-                </>
-              )}
+                </span>
+              ))}
+              {event.keywords.map((k) => (
+                <span key={k} className="inline-flex items-center gap-0.5">
+                  <Link
+                    href={`/tracker?term=${encodeURIComponent(k)}&window=${windowHours}`}
+                    className="rounded-full bg-zinc-100 px-1.5 py-0.5 text-[11px] text-zinc-500 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-400 dark:hover:bg-zinc-700"
+                  >
+                    {k}
+                  </Link>
+                  {event.promoted_keywords?.includes(k) && (
+                    <>
+                      <span className="rounded bg-emerald-100 px-0.5 text-[8px] font-bold text-emerald-700 dark:bg-emerald-900 dark:text-emerald-300">N</span>
+                      {onDeleteHeatWord && (
+                        <button type="button" onClick={() => onDeleteHeatWord(k)} className="text-[10px] text-zinc-300 hover:text-red-500">✕</button>
+                      )}
+                    </>
+                  )}
+                  {event.heat_discovered_keywords?.includes(k) && (
+                    <>
+                      <span className="rounded bg-blue-100 px-0.5 text-[8px] font-bold text-blue-700 dark:bg-blue-900 dark:text-blue-300">N</span>
+                      {onDeleteHeatWord && (
+                        <button type="button" onClick={() => onDeleteHeatWord(k)} className="text-[10px] text-zinc-300 hover:text-red-500">✕</button>
+                      )}
+                    </>
+                  )}
+                </span>
+              ))}
+            </div>
+          )}
+          {/* 相关文章列表(默认3条,可展开/收起) */}
+          {event.articles.length > 0 && (
+            <div className="border-t border-zinc-50 dark:border-zinc-800/50">
+              {displayArticles.map((a) => (
+                <Link
+                  key={a.id}
+                  href={`/article?id=${a.id}`}
+                  className="flex items-center gap-2 border-b border-zinc-50 px-3 py-2 transition last:border-b-0 hover:bg-zinc-50 dark:border-zinc-800/50 dark:hover:bg-zinc-800/50"
+                >
+                  <span className="min-w-0 flex-1 truncate text-[13px] text-zinc-700 dark:text-zinc-300">{a.title}</span>
+                  <span className="shrink-0 text-[10px] text-zinc-400">{SOURCE_LABELS[a.source_key] ?? a.source_key}</span>
+                  {a.heat_value > 0 && (
+                    <span className="shrink-0 text-[10px] font-medium tabular-nums text-red-500 dark:text-red-400">{formatHeat(a.heat_value)}</span>
+                  )}
+                </Link>
+              ))}
+            </div>
+          )}
+          {/* 底部:文章数 + 展开 + 来源 chips */}
+          <div className="flex flex-wrap items-center gap-1.5 border-t border-zinc-50 px-3 py-1.5 dark:border-zinc-800/50">
+            <span className="text-[11px] text-zinc-400">
+              {event.count > event.articles.length ? `${event.count} 篇（展示 ${event.articles.length}）` : `${event.count} 篇`}
             </span>
-          ))}
-          {event.keywords.map((k) => (
-            <span key={k} className="inline-flex items-center gap-0.5">
-              <Link
-                href={`/tracker?term=${encodeURIComponent(k)}&window=${windowHours}`}
-                className="rounded-full bg-zinc-100 px-1.5 py-0.5 text-[11px] text-zinc-500 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-400 dark:hover:bg-zinc-700"
+            {hasMore && (
+              <button
+                type="button"
+                onClick={() => setArticlesExpanded((v) => !v)}
+                className="text-[11px] text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100"
               >
-                {k}
-              </Link>
-              {event.promoted_keywords?.includes(k) && (
-                <>
-                  <span className="rounded bg-emerald-100 px-0.5 text-[8px] font-bold text-emerald-700 dark:bg-emerald-900 dark:text-emerald-300">N</span>
-                  {onDeleteHeatWord && (
-                    <button type="button" onClick={() => onDeleteHeatWord(k)} className="text-[10px] text-zinc-300 hover:text-red-500">✕</button>
-                  )}
-                </>
-              )}
-              {event.heat_discovered_keywords?.includes(k) && (
-                <>
-                  <span className="rounded bg-blue-100 px-0.5 text-[8px] font-bold text-blue-700 dark:bg-blue-900 dark:text-blue-300">N</span>
-                  {onDeleteHeatWord && (
-                    <button type="button" onClick={() => onDeleteHeatWord(k)} className="text-[10px] text-zinc-300 hover:text-red-500">✕</button>
-                  )}
-                </>
-              )}
-            </span>
-          ))}
-        </div>
+                {articlesExpanded ? "收起" : `+${event.articles.length - 3} 更多`}
+              </button>
+            )}
+            {event.sources.map((s) => (
+              <span key={s.source_key} className="rounded bg-zinc-100 px-1.5 py-0.5 text-[10px] text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400">
+                {SOURCE_LABELS[s.source_key] ?? s.source_key}&nbsp;{s.count}
+              </span>
+            ))}
+          </div>
+        </>
       )}
-      {/* 相关文章列表(默认3条,可展开/收起) */}
-      {event.articles.length > 0 && (
-        <div className="border-t border-zinc-50 dark:border-zinc-800/50">
-          {displayArticles.map((a) => (
-            <Link
-              key={a.id}
-              href={`/article?id=${a.id}`}
-              className="flex items-center gap-2 border-b border-zinc-50 px-3 py-2 transition last:border-b-0 hover:bg-zinc-50 dark:border-zinc-800/50 dark:hover:bg-zinc-800/50"
-            >
-              <span className="min-w-0 flex-1 truncate text-[13px] text-zinc-700 dark:text-zinc-300">{a.title}</span>
-              <span className="shrink-0 text-[10px] text-zinc-400">{SOURCE_LABELS[a.source_key] ?? a.source_key}</span>
-              {a.heat_value > 0 && (
-                <span className="shrink-0 text-[10px] font-medium tabular-nums text-red-500 dark:text-red-400">{formatHeat(a.heat_value)}</span>
-              )}
-            </Link>
-          ))}
-        </div>
-      )}
-      {/* 底部:文章数 + 展开 + 来源 chips */}
-      <div className="flex flex-wrap items-center gap-1.5 border-t border-zinc-50 px-3 py-1.5 dark:border-zinc-800/50">
-        <span className="text-[11px] text-zinc-400">
-          {event.count > event.articles.length ? `${event.count} 篇（展示 ${event.articles.length}）` : `${event.count} 篇`}
-        </span>
-        {hasMore && (
-          <button
-            type="button"
-            onClick={() => setExpanded((v) => !v)}
-            className="text-[11px] text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100"
-          >
-            {expanded ? "收起" : `+${event.articles.length - 3} 更多`}
-          </button>
-        )}
-        {event.sources.map((s) => (
-          <span key={s.source_key} className="rounded bg-zinc-100 px-1.5 py-0.5 text-[10px] text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400">
-            {SOURCE_LABELS[s.source_key] ?? s.source_key}&nbsp;{s.count}
-          </span>
-        ))}
-      </div>
     </div>
   );
 }
@@ -830,10 +854,6 @@ export default function Home() {
   const [topics, setTopics] = useState<TrackerTopic[]>([]);
   const [events, setEvents] = useState<TrackerEventGroup[]>([]);
   const [trackerWindow, setTrackerWindow] = useState(3);
-  // 卡片区块默认折叠,用户点标题切换。比 localStorage 持久化更轻 — 刷新后回默认
-  // (原因:折叠状态不算"用户偏好",每次进首页都从最简版开始,有热点再展开)。
-  const [eventsCollapsed, setEventsCollapsed] = useState(true);
-  const [entitiesCollapsed, setEntitiesCollapsed] = useState(true);
 
   // 热榜(专用接口,直接按 heat_value 排序,不受 published_at 分页影响)
   const [hotlist, setHotlist] = useState<HotlistResp>({ zhihu: [], baidu: [], weibo: [], sogou: [] });
@@ -1139,53 +1159,42 @@ export default function Home() {
           {/* 发生了什么大事 — 事件聚类 */}
           {events.length > 0 && (
             <div className="mb-6">
-              <div className="mb-3 flex items-center gap-2 cursor-pointer select-none" onClick={() => setEventsCollapsed((v) => !v)}>
+              <div className="mb-3 flex items-center gap-2">
                 <span className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">发生了什么大事</span>
                 <span className="text-base leading-none">⚡</span>
-                <span className="ml-1 text-xs text-zinc-400">{eventsCollapsed ? `▾ ${events.length}` : "▴"}</span>
-                {!eventsCollapsed && (
-                  <div className="ml-auto" onClick={(e) => e.stopPropagation()}>
-                    <WindowSwiper value={trackerWindow} options={[3, 6, 24, 72]} onChange={setTrackerWindow} />
-                  </div>
-                )}
-              </div>
-              {!eventsCollapsed && (
-                <div className="space-y-2">
-                  {events.map((event, i) => (
-                    <EventGroupCard key={i} event={event} windowHours={trackerWindow} onDeleteHeatWord={handleDeleteHeatWord} />
-                  ))}
+                <div className="ml-auto">
+                  <WindowSwiper value={trackerWindow} options={[3, 6, 24, 72]} onChange={setTrackerWindow} />
                 </div>
-              )}
+              </div>
+              <div className="space-y-2">
+                {events.map((event, i) => (
+                  <EventGroupCard key={i} event={event} windowHours={trackerWindow} onDeleteHeatWord={handleDeleteHeatWord} />
+                ))}
+              </div>
             </div>
           )}
 
           {/* 哪些对象值得关注 — 实体列表 */}
           {grouped.length > 0 && (
             <div className="mb-6">
-              <div className="mb-3 flex items-center gap-2 cursor-pointer select-none" onClick={() => setEntitiesCollapsed((v) => !v)}>
+              <div className="mb-3 flex items-center gap-2">
                 <span className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">哪些对象值得关注</span>
                 <span className="text-base leading-none">📌</span>
-                <span className="ml-1 text-xs text-zinc-400">{entitiesCollapsed ? `▾ ${grouped.length}` : "▴"}</span>
-                {/* 时间窗口仅在展开时显示;阻止冒泡避免点 tab 时折叠 */}
-                {!entitiesCollapsed && (
-                  <div className="ml-auto" onClick={(e) => e.stopPropagation()}>
-                    <WindowSwiper value={trackerWindow} options={[3, 6, 24, 72]} onChange={setTrackerWindow} />
-                  </div>
-                )}
-              </div>
-              {!entitiesCollapsed && (
-                <div className="space-y-4">
-                  {grouped.map(({ topic }) => (
-                    <TopicGroup
-                      key={`${topic.kind}:${topic.label}`}
-                      topic={topic}
-                      windowHours={trackerWindow}
-                      onSearch={handleSearch}
-                      onDeleteHeatWord={handleDeleteHeatWord}
-                    />
-                  ))}
+                <div className="ml-auto">
+                  <WindowSwiper value={trackerWindow} options={[3, 6, 24, 72]} onChange={setTrackerWindow} />
                 </div>
-              )}
+              </div>
+              <div className="space-y-4">
+                {grouped.map(({ topic }) => (
+                  <TopicGroup
+                    key={`${topic.kind}:${topic.label}`}
+                    topic={topic}
+                    windowHours={trackerWindow}
+                    onSearch={handleSearch}
+                    onDeleteHeatWord={handleDeleteHeatWord}
+                  />
+                ))}
+              </div>
             </div>
           )}
           {/* 热榜区块暂时隐藏(2026-05 用户反馈话题视图三层信息密度过大);
