@@ -65,10 +65,8 @@ func main() {
 		WriteTimeout: cfg.APIWriteTimeout,
 	}
 
-	// 热词发现算法评估 job:每小时跑一次,跑当前阈值 + 邻近候选阈值
-	// 比较 precision/score,把报告写入 heat_eval_reports 表。
-	// 不自动改算法,只输出建议供人工评估。失败不影响主流程(best-effort)。
-	go runHeatEvalLoop(ctx, log, repo)
+	// 热词发现算法评估 job — 暂停(已通过人工分析完成参数调优,不再需要定时跑)
+	// go runHeatEvalLoop(ctx, log, repo)
 
 	go func() {
 		log.Info("api listening", "addr", cfg.APIAddr)
