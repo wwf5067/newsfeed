@@ -124,6 +124,10 @@ func runHeatEvalLoop(ctx context.Context, log *slog.Logger, repo *api.Repository
 			return
 		}
 
+		// 把 DB 最新快照同步回内存缓存(每小时对齐一次)。
+		// 覆盖写、幂等:保证直接写 DB 的黑名单变更无需重启即可生效。
+		api.LoadHeatBlacklist(blacklist)
+
 		report := api.EvaluateHeatDiscovery(articles, blacklist)
 		report.WindowHours = 24
 		id, err := repo.InsertHeatEvalReport(evalCtx, report)

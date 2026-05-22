@@ -711,6 +711,17 @@ func collectHeatDiscoveredWordsWithParams(articles []model.Article, p HeatDiscov
 				if left == "" || right == "" {
 					continue
 				}
+				// 任一组件是单汉字(虚词/助词如"跟""曾""的")或在 stopTokens 中,
+				// 则跳过:拼接后只会产生跨词边界的无意义片段(如"反复跟""曾反复")。
+				if hanRuneCount(left) < 2 || hanRuneCount(right) < 2 {
+					continue
+				}
+				if _, ok := stopTokens[left]; ok {
+					continue
+				}
+				if _, ok := stopTokens[right]; ok {
+					continue
+				}
 				bigram := left + right
 				bigramHanLen := hanRuneCount(bigram)
 				// bigram 汉字长度在 [minHanLen, maxBigramHanLen] 范围内
@@ -744,6 +755,19 @@ func collectHeatDiscoveredWordsWithParams(articles []model.Article, p HeatDiscov
 				mid := normalized[i+1]
 				right := normalized[i+2]
 				if left == "" || mid == "" || right == "" {
+					continue
+				}
+				// 任一组件是单汉字或在 stopTokens 中,则跳过(同 bigram 逻辑)。
+				if hanRuneCount(left) < 2 || hanRuneCount(mid) < 2 || hanRuneCount(right) < 2 {
+					continue
+				}
+				if _, ok := stopTokens[left]; ok {
+					continue
+				}
+				if _, ok := stopTokens[mid]; ok {
+					continue
+				}
+				if _, ok := stopTokens[right]; ok {
 					continue
 				}
 				trigram := left + mid + right
