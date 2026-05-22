@@ -185,6 +185,10 @@ var (
 	// 拽出来作为 entity 强候选,让用户能看到"X院士"这种事件主体。
 	// 限制人名 2-4 字汉字以减少误命中(如"成功院士"中的"成功"不是人名)。
 	honorificRegex = regexp.MustCompile(`[\p{Han}]{2,4}(院士|教授|总裁|董事长|市长|省长|部长)`)
+	// productModelRegex 提取"中文品牌+大写型号代码"复合词(小鹏GX / 小米YU7 / 蔚来ET5)。
+	// gse 常把品牌和型号切开;AhoCorasick 只能命中词典里精确注册的型号。
+	// 这里扫描原始标题,兜底所有"2-4字汉字+1大写字母+0-4位大写字母/数字"模式。
+	productModelRegex = regexp.MustCompile(`[\p{Han}]{2,4}[A-Z][A-Z0-9]{0,4}`)
 	stopTokens     = map[string]struct{}{
 		"这个": {}, "那个": {}, "一个": {}, "一次": {}, "一些": {}, "一种": {},
 		"我们": {}, "你们": {}, "他们": {}, "大家": {}, "自己": {}, "别人": {},
@@ -343,7 +347,7 @@ var (
 		// 医疗/民生:单独出现时是高价值话题词,不能被 weak 过滤
 		"医保",
 	}
-	trackerTrimPrefixes = []string{"关于", "有关", "对于", "因为", "因", "就", "将", "把", "被", "让", "的", "请问", "如何看待", "如何评价", "为什么", "怎么评价", "怎么看", "最新", "突发", "热议", "围观"}
+	trackerTrimPrefixes = []string{"关于", "有关", "对于", "因为", "因", "就", "将", "把", "被", "让", "的", "没", "请问", "如何看待", "如何评价", "为什么", "怎么评价", "怎么看", "最新", "突发", "热议", "围观"}
 	trackerTrimSuffixes = []string{
 		"怎么回事", "是真的吗", "意味着什么", "说了什么", "最新回应", "回应",
 		"发布", "表示", "来了", "出炉", "曝光", "完整版", "完整版视频", "视频",
@@ -367,7 +371,7 @@ var (
 		"什么原因", "什么情况", "合理吗", "你认同吗",
 		"能走多远", "出路在哪", "在哪里",
 		// 单字动词/助词尾缀:防止 gse 把"空间站将"/"李在明说" 整体切出
-		"将", "在", "说", "让", "与", "的",
+		"将", "在", "说", "让", "与", "的", "称",
 	}
 
 	// compoundGeoAbbrevs 2字合称→两个实体的拆解。
@@ -1103,6 +1107,20 @@ func extractTrackerCandidates(article model.Article, heatDiscovered map[string]s
 		}
 	}
 
+	// 0.8. 产品型号复合词扫描:"中文品牌+大写型号"模式(小鹏GX/小米YU7/蔚来ET5)。
+	//      gse 通常把品牌和型号切开(["小鹏","GX"]),AhoCorasick 只命中词典里精确
+	//      注册的型号 — 两者都需要人工维护词典条目才能识别新车型。
+	//      此步骤直接在原始标题上正则扫描,兜底一切"2-4字汉字+首大写+0-4位大写/数字"
+	//      组合,无需词典枚举每个型号。
+	for _, m := range productModelRegex.FindAllString(title, -1) {
+		normalized := canonicalizeTrackerToken(m)
+		if normalized == "" {
+			continue
+		}
+		forcedEntities[normalized] = struct{}{}
+		appendTrackerPool(&ordered, poolSeen, normalized)
+	}
+
 	// 1. 词典扫描:整段标题不区分大小写匹配 lexicon 别名,优先级最高。
 	collectTrackerLexiconMatches(title, &ordered, poolSeen)
 
@@ -1207,6 +1225,13 @@ func extractTrackerCandidates(article model.Article, heatDiscovered map[string]s
 		// 但仍过滤纯数字和量词短语(这类无论多频繁都无追踪意义)。
 		if heatFound && (isAllDigits(label) || looksLikeNumericMeasure(label)) {
 			heatFound = false
+		}
+		// 万/亿/千/百/兆/十 起头的弱中文片段(如"万彩礼""千元机")通过了 normalizeTrackerToken
+		// 的 heatFound 旁路,在消费时补过滤,防止量词前缀噪声渗入候选池。
+		if heatFound && isWeakChineseFragment(label) {
+			if r := []rune(label); len(r) > 0 && strings.ContainsRune("万亿千百兆十", r[0]) {
+				heatFound = false
+			}
 		}
 		// compoundTopicKeywords 是人工精选的高价值复合词(如"贸易谈判""全球升温"),
 		// 已在 0.6 步显式扫描注入,不再经过 shouldKeepTrackerToken 过滤。
@@ -1715,6 +1740,12 @@ func normalizeTrackerToken(token string) string {
 	}
 	if _, blocked := stopTokens[token]; blocked {
 		return ""
+	}
+	// 通用人物词作前缀时也阻断(如"女子收22万彩礼"→gse 切出"女子收22"应被过滤)
+	for _, pfx := range []string{"男子", "女子", "男孩", "女孩"} {
+		if strings.HasPrefix(token, pfx) && token != pfx {
+			return ""
+		}
 	}
 	runeCount := utf8.RuneCountInString(token)
 	if runeCount < 2 || runeCount > 20 {
