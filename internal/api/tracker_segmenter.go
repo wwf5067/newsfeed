@@ -110,7 +110,30 @@ func InjectPromotedWords(candidates []HeatCandidate) {
 	if trackerSegErr != nil {
 		return
 	}
+	skipped := 0
 	for _, c := range candidates {
+		// 质量门:stopTokens / 数字开头 / 人物角色前缀 — 这些 token 在历史批次里可能已
+		// 被错误转正,此处过滤阻止其渗入 promotedWordSet,使 0.7 转正词扫描不再旁路主过滤。
+		if _, blocked := stopTokens[c.Word]; blocked {
+			skipped++
+			continue
+		}
+		if r := []rune(c.Word); len(r) > 0 && (r[0] >= '0' && r[0] <= '9') {
+			skipped++
+			continue
+		}
+		hasRolePrefix := false
+		for _, pfx := range []string{"男子", "女子", "男孩", "女孩"} {
+			if strings.HasPrefix(c.Word, pfx) && c.Word != pfx {
+				hasRolePrefix = true
+				break
+			}
+		}
+		if hasRolePrefix {
+			skipped++
+			continue
+		}
+
 		// 注入 gse 词典让分词器整体切出
 		_ = trackerSeg.AddToken(c.Word, 100, "n")
 		// entity 类型额外注入 labelSet,让 shouldKeepTrackerToken 优先保留
@@ -123,7 +146,7 @@ func InjectPromotedWords(candidates []HeatCandidate) {
 	if len(candidates) > 0 {
 		trackerSeg.CalcToken()
 		slog.Info("injected promoted heat candidates into gse",
-			"count", len(candidates))
+			"count", len(candidates)-skipped, "skipped_quality", skipped)
 	}
 }
 
