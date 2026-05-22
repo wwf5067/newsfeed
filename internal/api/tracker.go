@@ -221,6 +221,13 @@ var (
 		"VS": {}, "vs": {}, "Vs": {},
 		// 赛事通用词:单独成词无信息量("总决赛"/"NBA决赛"等组合词不受影响,此处为精确匹配)
 		"决赛": {},
+		// 单字虚词/助词/介词:作为 bigram/trigram 组件会产生跨词边界的无效片段
+		// (如"曾反复""反复跟""跟孙杨")。选取"永远不用作姓氏"的高频功能字。
+		// 不含于/向/经/曾/由/为/致 等兼作姓氏的字,这些靠 minArticles 自然过滤。
+		"跟": {}, "被": {}, "已": {}, "让": {}, "使": {},
+		"或": {}, "而": {}, "若": {}, "未": {}, "只": {},
+		"即": {}, "比": {}, "如": {}, "至": {}, "自": {},
+		"以": {}, "在": {}, "从": {}, "对": {}, "且": {},
 		// 套话/问句独立成段时直接命中(trim 路径之外的兜底)
 		"如何评价": {}, "怎么评价": {}, "怎么看": {}, "如何看待": {},
 		"哪些信息": {}, "哪些相关方": {}, "该负责": {},
@@ -690,6 +697,18 @@ func collectHeatDiscoveredWordsWithParams(articles []model.Article, p HeatDiscov
 			if cleaned != "" && utf8.RuneCountInString(cleaned) >= 2 {
 				hanLen := hanRuneCount(cleaned)
 				if hanLen >= minHanLen && hanLen <= maxHanLen {
+					// 排除混合了非汉字的无效 unigram:
+					//   1. 非汉字字符夹在两段汉字之间(如"散文AI率超"),这是 gse 对混排
+					//      文本的错误切分,本身没有独立词义。
+					//   2. token 以非汉字字符开头(如"AI率超"),不是汉语词汇形式。
+					// 允许"末尾带非汉字后缀"的形式(如"战特斯拉M"),
+					// 但通过 isPureHan 组件检查在 bigram 层面已阻止其拼接传播。
+					if hasNonHanBetweenHan(cleaned) {
+						continue
+					}
+					if r := []rune(cleaned); len(r) > 0 && !unicode.Is(unicode.Han, r[0]) {
+						continue
+					}
 					if !isExcludedHeatWord(cleaned) {
 						if _, ok := seen[cleaned]; !ok {
 							seen[cleaned] = struct{}{}
@@ -711,9 +730,10 @@ func collectHeatDiscoveredWordsWithParams(articles []model.Article, p HeatDiscov
 				if left == "" || right == "" {
 					continue
 				}
-				// 任一组件是单汉字(虚词/助词如"跟""曾""的")或在 stopTokens 中,
-				// 则跳过:拼接后只会产生跨词边界的无意义片段(如"反复跟""曾反复")。
-				if hanRuneCount(left) < 2 || hanRuneCount(right) < 2 {
+				// 任一组件不是纯汉字(含非汉字字符,如"散文AI""率超60%")
+				// 或在 stopTokens 中(含单字虚词如"跟""被"),则跳过。
+				// isPureHan 已隐含 len≥1;stopTokens 兼覆盖单字虚词和多字套话。
+				if !isPureHan(left) || !isPureHan(right) {
 					continue
 				}
 				if _, ok := stopTokens[left]; ok {
@@ -757,8 +777,8 @@ func collectHeatDiscoveredWordsWithParams(articles []model.Article, p HeatDiscov
 				if left == "" || mid == "" || right == "" {
 					continue
 				}
-				// 任一组件是单汉字或在 stopTokens 中,则跳过(同 bigram 逻辑)。
-				if hanRuneCount(left) < 2 || hanRuneCount(mid) < 2 || hanRuneCount(right) < 2 {
+				// 任一组件不是纯汉字或在 stopTokens 中,则跳过(同 bigram 逻辑)。
+				if !isPureHan(left) || !isPureHan(mid) || !isPureHan(right) {
 					continue
 				}
 				if _, ok := stopTokens[left]; ok {
@@ -2107,6 +2127,52 @@ func hanRuneCount(token string) int {
 		}
 	}
 	return count
+}
+
+// isPureHan 返回 true 当且仅当字符串非空且全部字符都是汉字。
+// 用于 bigram/trigram 组件过滤:混合了非汉字的 token(如"散文AI""率超60%")
+// 不应作为组件拼接,否则会产生跨词边界的无意义候选。
+func isPureHan(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if !unicode.Is(unicode.Han, r) {
+			return false
+		}
+	}
+	return true
+}
+
+// hasNonHanBetweenHan 返回 true 当字符串中存在非汉字字符夹在两段汉字之间。
+// 例如"散文AI率超"(AI 夹在散文和率超之间)返回 true。
+// "战特斯拉M"(M 在末尾,后面没有汉字)返回 false。
+// 用于 unigram 候选过滤:此类 token 是 gse 对混排文本的错误切分,没有独立词义。
+func hasNonHanBetweenHan(s string) bool {
+	runes := []rune(s)
+	n := len(runes)
+	// 找最后一个汉字的位置
+	lastHan := -1
+	for i := n - 1; i >= 0; i-- {
+		if unicode.Is(unicode.Han, runes[i]) {
+			lastHan = i
+			break
+		}
+	}
+	if lastHan <= 0 {
+		return false
+	}
+	// 如果在 [0, lastHan) 范围内存在非汉字字符,说明有非汉字夹在汉字之间
+	seenHan := false
+	for i := 0; i < lastHan; i++ {
+		if unicode.Is(unicode.Han, runes[i]) {
+			seenHan = true
+		} else if seenHan {
+			// 前面有汉字,当前是非汉字,且后面还有汉字(lastHan > i)
+			return true
+		}
+	}
+	return false
 }
 
 func isWeakChineseFragment(token string) bool {
