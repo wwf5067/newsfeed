@@ -534,6 +534,59 @@ var trackerEntityLexicon = []trackerLexiconEntry{
 	// 国际人物补充
 	{Label: "李显龙", Category: "person", Aliases: []string{"李显龙"}},
 	{Label: "马科斯", Category: "person", Aliases: []string{"马科斯", "Marcos", "marcos"}},
+
+	// === 高信息量动作关键词 ===
+	// 加入词典的目的:这类动词在 gse 词典中频次高,会被 freq cutoff 过滤,
+	// 但它们出现在标题里本身就是高信号事件(没收/降息/逮捕),应强制保留为 keyword。
+	// kind 由 looksLikeEntity 决定:动词返回 false → kind="keyword" ✓
+
+	// 监管/执法
+	{Label: "没收", Category: "event", Aliases: []string{"没收", "没收违法所得"}},
+	{Label: "立案", Category: "event", Aliases: []string{"立案", "立案调查", "立案侦查"}},
+	{Label: "查处", Category: "event", Aliases: []string{"查处"}},
+	{Label: "查封", Category: "event", Aliases: []string{"查封"}},
+	{Label: "冻结", Category: "event", Aliases: []string{"冻结", "冻结资产"}},
+	{Label: "取缔", Category: "event", Aliases: []string{"取缔"}},
+	{Label: "吊销", Category: "event", Aliases: []string{"吊销", "吊销执照", "吊销营业执照"}},
+
+	// 司法
+	{Label: "逮捕", Category: "event", Aliases: []string{"逮捕", "被捕"}},
+	{Label: "拘留", Category: "event", Aliases: []string{"拘留", "羁押", "拘押"}},
+	{Label: "起诉", Category: "event", Aliases: []string{"起诉", "被起诉", "提起诉讼"}},
+	{Label: "判决", Category: "event", Aliases: []string{"判决", "宣判", "定罪量刑"}},
+	{Label: "定罪", Category: "event", Aliases: []string{"定罪"}},
+
+	// 外交/军事
+	{Label: "制裁", Category: "event", Aliases: []string{"制裁", "经济制裁", "金融制裁"}},
+	{Label: "驱逐", Category: "event", Aliases: []string{"驱逐", "驱逐出境", "驱逐外交官"}},
+	{Label: "断交", Category: "event", Aliases: []string{"断交", "断绝外交关系"}},
+	{Label: "宣战", Category: "event", Aliases: []string{"宣战"}},
+	{Label: "停火", Category: "event", Aliases: []string{"停火", "停战", "停火协议", "停火协定"}},
+	{Label: "撤军", Category: "event", Aliases: []string{"撤军", "撤兵", "撤退"}},
+
+	// 金融事件
+	{Label: "降息", Category: "event", Aliases: []string{"降息", "降低利率", "降息25个基点", "降息50个基点"}},
+	{Label: "加息", Category: "event", Aliases: []string{"加息", "加息25个基点", "加息50个基点"}},
+	{Label: "降准", Category: "event", Aliases: []string{"降准", "降低存款准备金率"}},
+	{Label: "退市", Category: "event", Aliases: []string{"退市", "强制退市", "摘牌"}},
+	{Label: "停牌", Category: "event", Aliases: []string{"停牌", "紧急停牌"}},
+	{Label: "破产", Category: "event", Aliases: []string{"破产", "申请破产", "破产重组", "破产清算"}},
+	{Label: "倒闭", Category: "event", Aliases: []string{"倒闭", "关停", "停业"}},
+	{Label: "爆雷", Category: "event", Aliases: []string{"爆雷", "暴雷"}},
+	{Label: "暴跌", Category: "event", Aliases: []string{"暴跌", "大跌", "闪崩"}},
+	{Label: "暴涨", Category: "event", Aliases: []string{"暴涨", "大涨", "飙升"}},
+
+	// 社会/消费
+	{Label: "下架", Category: "event", Aliases: []string{"下架", "紧急下架", "强制下架"}},
+	{Label: "召回", Category: "event", Aliases: []string{"召回", "紧急召回", "大规模召回"}},
+	{Label: "封号", Category: "event", Aliases: []string{"封号", "封禁", "账号封禁"}},
+	{Label: "停播", Category: "event", Aliases: []string{"停播", "强制停播", "下线"}},
+
+	// 灾难/事故
+	{Label: "爆炸", Category: "event", Aliases: []string{"爆炸", "爆炸事故", "发生爆炸"}},
+	{Label: "坠毁", Category: "event", Aliases: []string{"坠毁", "坠机", "坠落"}},
+	{Label: "垮塌", Category: "event", Aliases: []string{"垮塌", "坍塌", "塌陷", "倒塌"}},
+	{Label: "泄漏", Category: "event", Aliases: []string{"泄漏", "泄露", "核泄漏", "气体泄漏"}},
 }
 
 var trackerEntityAliasIndex = buildTrackerEntityAliasIndex(trackerEntityLexicon)
