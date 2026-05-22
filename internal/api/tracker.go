@@ -811,6 +811,10 @@ func collectHeatDiscoveredWordsWithParams(articles []model.Article, p HeatDiscov
 				if isVerbComponent(left) {
 					continue
 				}
+				// 中间为纯动词(v)→ 谓语结构(主+谓+宾/补,如"人口享同等""技术驱动创新"),不是话题词。
+				if isVerbComponent(mid) {
+					continue
+				}
 				trigram := left + mid + right
 				trigramHanLen := hanRuneCount(trigram)
 				if trigramHanLen < 3 || trigramHanLen > maxBigramHanLen {
