@@ -751,6 +751,10 @@ func collectHeatDiscoveredWordsWithParams(articles []model.Article, p HeatDiscov
 				if isVerbComponent(right) {
 					continue
 				}
+				// 左端为纯动词(v)→ 谓语起头的叙述片段(如"纠缠复旦""进攻阵地"),不是话题词。
+				if isVerbComponent(left) {
+					continue
+				}
 				bigram := left + right
 				bigramHanLen := hanRuneCount(bigram)
 				// bigram 汉字长度在 [minHanLen, maxBigramHanLen] 范围内
@@ -801,6 +805,10 @@ func collectHeatDiscoveredWordsWithParams(articles []model.Article, p HeatDiscov
 				}
 				// 右端为纯动词(v)→ 事件叙述碎片,不是话题词(同 bigram 逻辑)。
 				if isVerbComponent(right) {
+					continue
+				}
+				// 左端为纯动词(v)→ 谓语起头的叙述片段(同 bigram 逻辑)。
+				if isVerbComponent(left) {
 					continue
 				}
 				trigram := left + mid + right
