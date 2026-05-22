@@ -2108,9 +2108,11 @@ func looksLikeNumericMeasure(token string) bool {
 	for _, r := range runes {
 		if strings.ContainsRune(chineseNumMultipliers, r) {
 			// token 含大数量级字符 → 再检查是否以量词单位结尾
+			// 人员计量(名/人/例/次/家)覆盖"万名""多万名""亿人""千例"等量词短语。
 			for _, suffix := range []string{
 				"美元", "欧元", "英镑", "日元", "港元", "韩元", "卢布",
 				"人民币", "元", "斤", "吨", "克", "升",
+				"名", "人", "例", "次", "家",
 			} {
 				if strings.HasSuffix(token, suffix) {
 					return true
