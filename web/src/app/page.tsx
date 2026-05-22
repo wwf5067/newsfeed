@@ -649,6 +649,64 @@ function CompactRow({ item, rank }: { item: HotlistItem; rank: number }) {
   );
 }
 
+// ======================== WindowSwiper ========================
+//
+// 时间窗口选择器,支持:
+//   - 点击 tab 直接切换
+//   - 移动端横向滑动(touch swipe)切换:左滑选下一个,右滑选上一个
+//
+// 横滑用 touchstart/touchend 计算 dx,阈值 30px(小于则忽略,避免误触);
+// 不接管纵向滚动(只在 |dx| > |dy| 时才触发切换)。
+
+function WindowSwiper({
+  value,
+  options,
+  onChange,
+}: {
+  value: number;
+  options: number[];
+  onChange: (n: number) => void;
+}) {
+  const touchStart = useRef<{ x: number; y: number } | null>(null);
+
+  const onTouchStart = (e: React.TouchEvent) => {
+    const t = e.touches[0];
+    touchStart.current = { x: t.clientX, y: t.clientY };
+  };
+  const onTouchEnd = (e: React.TouchEvent) => {
+    if (!touchStart.current) return;
+    const t = e.changedTouches[0];
+    const dx = t.clientX - touchStart.current.x;
+    const dy = t.clientY - touchStart.current.y;
+    touchStart.current = null;
+    if (Math.abs(dx) < 30 || Math.abs(dx) <= Math.abs(dy)) return;
+    const idx = options.indexOf(value);
+    if (idx < 0) return;
+    if (dx < 0 && idx < options.length - 1) onChange(options[idx + 1]);
+    else if (dx > 0 && idx > 0) onChange(options[idx - 1]);
+  };
+
+  return (
+    <div className="flex gap-0.5 touch-pan-y" onTouchStart={onTouchStart} onTouchEnd={onTouchEnd}>
+      {options.map((w) => (
+        <button
+          key={w}
+          type="button"
+          onClick={() => onChange(w)}
+          className={
+            "rounded-full px-2 py-0.5 text-[11px] transition " +
+            (value === w
+              ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
+              : "text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200")
+          }
+        >
+          {w}h
+        </button>
+      ))}
+    </div>
+  );
+}
+
 // ======================== HotPanel ========================
 
 function HotPanel({ zhihu, baidu, weibo, sogou }: { zhihu: HotlistItem[]; baidu: HotlistItem[]; weibo: HotlistItem[]; sogou: HotlistItem[] }) {
@@ -772,6 +830,10 @@ export default function Home() {
   const [topics, setTopics] = useState<TrackerTopic[]>([]);
   const [events, setEvents] = useState<TrackerEventGroup[]>([]);
   const [trackerWindow, setTrackerWindow] = useState(3);
+  // 卡片区块默认折叠,用户点标题切换。比 localStorage 持久化更轻 — 刷新后回默认
+  // (原因:折叠状态不算"用户偏好",每次进首页都从最简版开始,有热点再展开)。
+  const [eventsCollapsed, setEventsCollapsed] = useState(true);
+  const [entitiesCollapsed, setEntitiesCollapsed] = useState(true);
 
   // 热榜(专用接口,直接按 heat_value 排序,不受 published_at 分页影响)
   const [hotlist, setHotlist] = useState<HotlistResp>({ zhihu: [], baidu: [], weibo: [], sogou: [] });
@@ -1077,77 +1139,58 @@ export default function Home() {
           {/* 发生了什么大事 — 事件聚类 */}
           {events.length > 0 && (
             <div className="mb-6">
-              <div className="mb-3 flex items-center gap-2">
+              <div className="mb-3 flex items-center gap-2 cursor-pointer select-none" onClick={() => setEventsCollapsed((v) => !v)}>
                 <span className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">发生了什么大事</span>
                 <span className="text-base leading-none">⚡</span>
-                <div className="ml-auto flex gap-0.5">
-                  {[3, 6, 24, 72].map((w) => (
-                    <button
-                      key={w}
-                      type="button"
-                      onClick={() => setTrackerWindow(w)}
-                      className={
-                        "rounded-full px-2 py-0.5 text-[11px] transition " +
-                        (trackerWindow === w
-                          ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
-                          : "text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200")
-                      }
-                    >
-                      {w}h
-                    </button>
+                <span className="ml-1 text-xs text-zinc-400">{eventsCollapsed ? `▾ ${events.length}` : "▴"}</span>
+                {!eventsCollapsed && (
+                  <div className="ml-auto" onClick={(e) => e.stopPropagation()}>
+                    <WindowSwiper value={trackerWindow} options={[3, 6, 24, 72]} onChange={setTrackerWindow} />
+                  </div>
+                )}
+              </div>
+              {!eventsCollapsed && (
+                <div className="space-y-2">
+                  {events.map((event, i) => (
+                    <EventGroupCard key={i} event={event} windowHours={trackerWindow} onDeleteHeatWord={handleDeleteHeatWord} />
                   ))}
                 </div>
-              </div>
-              <div className="space-y-2">
-                {events.map((event, i) => (
-                  <EventGroupCard key={i} event={event} windowHours={trackerWindow} onDeleteHeatWord={handleDeleteHeatWord} />
-                ))}
-              </div>
+              )}
             </div>
           )}
 
           {/* 哪些对象值得关注 — 实体列表 */}
           {grouped.length > 0 && (
             <div className="mb-6">
-              <div className="mb-3 flex items-center gap-2">
+              <div className="mb-3 flex items-center gap-2 cursor-pointer select-none" onClick={() => setEntitiesCollapsed((v) => !v)}>
                 <span className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">哪些对象值得关注</span>
                 <span className="text-base leading-none">📌</span>
-                {/* 当 events 区块未渲染(events.length===0)时,关注对象成为顶部首块,
-                    这里再放一个时间窗口选择器以便用户随时切窗口。
-                    events 已有时,这里仍展示一份(操作直觉:每块都能切自己的窗口),
-                    state 是同一个 trackerWindow 共享。 */}
-                <div className="ml-auto flex gap-0.5">
-                  {[3, 6, 24, 72].map((w) => (
-                    <button
-                      key={w}
-                      type="button"
-                      onClick={() => setTrackerWindow(w)}
-                      className={
-                        "rounded-full px-2 py-0.5 text-[11px] transition " +
-                        (trackerWindow === w
-                          ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
-                          : "text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200")
-                      }
-                    >
-                      {w}h
-                    </button>
+                <span className="ml-1 text-xs text-zinc-400">{entitiesCollapsed ? `▾ ${grouped.length}` : "▴"}</span>
+                {/* 时间窗口仅在展开时显示;阻止冒泡避免点 tab 时折叠 */}
+                {!entitiesCollapsed && (
+                  <div className="ml-auto" onClick={(e) => e.stopPropagation()}>
+                    <WindowSwiper value={trackerWindow} options={[3, 6, 24, 72]} onChange={setTrackerWindow} />
+                  </div>
+                )}
+              </div>
+              {!entitiesCollapsed && (
+                <div className="space-y-4">
+                  {grouped.map(({ topic }) => (
+                    <TopicGroup
+                      key={`${topic.kind}:${topic.label}`}
+                      topic={topic}
+                      windowHours={trackerWindow}
+                      onSearch={handleSearch}
+                      onDeleteHeatWord={handleDeleteHeatWord}
+                    />
                   ))}
                 </div>
-              </div>
-              <div className="space-y-4">
-                {grouped.map(({ topic }) => (
-                  <TopicGroup
-                    key={`${topic.kind}:${topic.label}`}
-                    topic={topic}
-                    windowHours={trackerWindow}
-                    onSearch={handleSearch}
-                    onDeleteHeatWord={handleDeleteHeatWord}
-                  />
-                ))}
-              </div>
+              )}
             </div>
           )}
-          {(hotlist.zhihu.length > 0 || hotlist.baidu.length > 0 || hotlist.weibo.length > 0 || hotlist.sogou.length > 0) && (
+          {/* 热榜区块暂时隐藏(2026-05 用户反馈话题视图三层信息密度过大);
+              组件 HotPanel 保留以便随时恢复:把下面 false 改回原条件即可。 */}
+          {false && (hotlist.zhihu.length > 0 || hotlist.baidu.length > 0 || hotlist.weibo.length > 0 || hotlist.sogou.length > 0) && (
             <>
               {grouped.length > 0 && (
                 <div className="mb-4 h-px bg-zinc-200 dark:bg-zinc-800" />
