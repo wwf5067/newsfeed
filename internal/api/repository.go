@@ -754,3 +754,29 @@ func (r *Repository) ListHeatBlacklist(ctx context.Context) ([]string, error) {
 	}
 	return out, rows.Err()
 }
+
+// ListPendingHeatCandidates 返回尚未转正(promoted_at IS NULL)且累计命中次数 >= minHits 的热词。
+// 用于服务启动时恢复 pendingHeatWords 内存集合,实现跨重启的跨窗口热词累积。
+func (r *Repository) ListPendingHeatCandidates(ctx context.Context, minHits int) ([]string, error) {
+	rows, err := r.pool.Query(ctx,
+		`SELECT word FROM heat_candidates
+		 WHERE promoted_at IS NULL
+		   AND total_hits >= $1
+		   AND word NOT IN (SELECT word FROM heat_blacklist)
+		 ORDER BY total_hits DESC`,
+		minHits,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var w string
+		if err := rows.Scan(&w); err != nil {
+			return nil, err
+		}
+		out = append(out, w)
+	}
+	return out, rows.Err()
+}

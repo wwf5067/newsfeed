@@ -50,6 +50,13 @@ func main() {
 		log.Info("loaded heat blacklist", "count", len(blacklist))
 	}
 
+	// 启动时加载尚未转正的热词候选(total_hits >= 2),恢复跨窗口累积状态。
+	// minHits=2 与 collectHeatDiscoveredWords 的 minArticles 对齐:至少命中过 2 篇才值得保留。
+	if pending, err := repo.ListPendingHeatCandidates(ctx, 2); err == nil && len(pending) > 0 {
+		handler.LoadPendingHeatWords(pending)
+		log.Info("loaded pending heat candidates", "count", len(pending))
+	}
+
 	srv := &http.Server{
 		Addr:         cfg.APIAddr,
 		Handler:      api.NewRouter(handler),

@@ -664,6 +664,40 @@ func collectHeatDiscoveredWords(articles []model.Article) map[string]struct{} {
 					bigramSources[bigram][article.SourceKey] = struct{}{}
 				}
 			}
+
+			// --- trigram 统计: 当前 token + 后两个 token ---
+			// 目标:发现 gse 切成 3 碎片的复合词,如"段"+"永"+"平"→"段永平",
+			// 或品牌名+"SU"+"7"→"小米SU7"(若 gse 切碎)。
+			// 汉字长度限制 [3, maxBigramHanLen] 避免过长 trigram 进入结果。
+			if i+2 < len(normalized) {
+				left := normalized[i]
+				mid := normalized[i+1]
+				right := normalized[i+2]
+				if left == "" || mid == "" || right == "" {
+					continue
+				}
+				trigram := left + mid + right
+				trigramHanLen := hanRuneCount(trigram)
+				if trigramHanLen < 3 || trigramHanLen > maxBigramHanLen {
+					continue
+				}
+				if _, ok := trackerEntityLabelSet[trigram]; ok {
+					continue
+				}
+				if isExcludedHeatWord(trigram) {
+					continue
+				}
+				trigramKey := trigram + "\x00tri" // 避免与 bigram map 键冲突
+				if _, ok := seenBigram[trigramKey]; !ok {
+					seenBigram[trigramKey] = struct{}{}
+					if bigramArticles[trigram] == nil {
+						bigramArticles[trigram] = make(map[int64]struct{})
+						bigramSources[trigram] = make(map[string]struct{})
+					}
+					bigramArticles[trigram][article.ID] = struct{}{}
+					bigramSources[trigram][article.SourceKey] = struct{}{}
+				}
+			}
 		}
 	}
 
@@ -1269,6 +1303,17 @@ func extractTrackerCandidates(article model.Article, heatDiscovered map[string]s
 	// 不是独立话题实体;应从输出中删去。仅当地名在标题中全程只以"地名+职业角色"
 	// 形式出现时才过滤(visitSuffixToEntity 等注入的地名本身不在标题里,不受影响)。
 	out = filterAdjunctiveGeoEntities(title, out)
+
+	// 黑名单过滤:被用户明确删除的词不参与事件聚类和候选输出。
+	// 必须在 dedup/cap 之后做,否则黑名单词仍可能通过 dedup 被保留为"更长形式"。
+	n := 0
+	for _, c := range out {
+		if !isBlacklisted(c.Label) {
+			out[n] = c
+			n++
+		}
+	}
+	out = out[:n]
 
 	if len(out) > 6 {
 		out = out[:6]
@@ -2016,6 +2061,21 @@ func looksLikeEntity(token string) bool {
 			return true
 		}
 	}
+	// POS 兜底:gse 标注为人名(nr/nrt)的纯汉字词直接视为实体。
+	// 仅对 2-4 个汉字的纯中文 token 生效,防止英文缩写/混合词被误判。
+	// 词典已覆盖的词在函数开头就 return true,不会走到这里。
+	runes := []rune(token)
+	if len(runes) >= 2 && len(runes) <= 4 && hanRuneCount(token) == len(runes) {
+		segs := posSegmentTitle(token)
+		for _, seg := range segs {
+			if strings.TrimSpace(seg.Text) == strings.TrimSpace(token) {
+				if seg.Pos == "nr" || seg.Pos == "nrt" {
+					return true
+				}
+				break
+			}
+		}
+	}
 	return false
 }
 
@@ -2729,7 +2789,15 @@ func clusterTrackerEvents(articles []model.Article, heatDiscovered map[string]st
 	// 高覆盖率是正常现象而非泛化大词。
 	const hubCoverageThreshold = 0.40
 	const hubMinArticles = 20
-	if len(metas) >= hubMinArticles {
+	// 动态 hub 扩展最小文章数:小窗口文章池小,hubMinArticles=20 几乎永远不触发。
+	// 按窗口大小调整:≤3h→8篇, ≤6h→12篇, 其他→20篇(原值)。
+	effectiveHubMin := hubMinArticles
+	if windowHours <= 3 {
+		effectiveHubMin = 8
+	} else if windowHours <= 6 {
+		effectiveHubMin = 12
+	}
+	if len(metas) >= effectiveHubMin {
 		for label, idxList := range entityToArticles {
 			if float64(len(idxList))/float64(len(metas)) > hubCoverageThreshold {
 				hubEntities[label] = struct{}{}
@@ -2740,16 +2808,26 @@ func clusterTrackerEvents(articles []model.Article, heatDiscovered map[string]st
 	const titleCosineThreshold = 0.14
 	const titleCosineSparseResidualThreshold = 0.05
 	const titleCosineRawFallbackThreshold = 0.18
-	// pairLinkThreshold 0.42 → 0.35:小窗口(3-6h)文章池小、共现稀疏,
-	// 0.42 时事件聚合很少(prod 实测 3h 仅 4 个事件,文章池 166 篇)。
-	// 0.35 让"共享 1 个具体实体 + 中等标题相似度"也能合并,代价是个别
-	// 弱关联文章可能被合到大事件里 — 比把事件拆得过散更可读。
-	const pairLinkThreshold = 0.35
+	// pairLinkThreshold 动态适应窗口大小:
+	// 小窗口(≤3h)文章池小、共现稀疏,门槛放低以提高召回;
+	// 大窗口(24h+)文章多、背景噪声高,门槛适当提高以保证精度。
+	var pairLinkThreshold float64
+	switch {
+	case windowHours <= 3:
+		pairLinkThreshold = 0.28
+	case windowHours <= 6:
+		pairLinkThreshold = 0.30
+	default:
+		pairLinkThreshold = 0.35
+	}
 	const wEntity = 0.35
 	const wTitle = 0.35
 	const wKeyword = 0.15
-	const wTime = 0.10
-	const wSourceDiversity = 0.05
+	// wTime ↓ 0.10→0.05, wSourceDiversity ↑ 0.05→0.10:
+	// 跨源多样性比发布时间差更能区分"真正不同话题的文章",提高权重后
+	// 单源刷屏文章不再被聚到同一事件,减少噪声聚合。总权重保持 1.0。
+	const wTime = 0.05
+	const wSourceDiversity = 0.10
 
 	titleVectors := make([]map[string]float64, len(metas))
 	for i, m := range metas {

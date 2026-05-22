@@ -40,14 +40,22 @@ type Handler struct {
 	// /trackers 短 TTL 内存缓存:避免每次请求对 500 篇文章跑完整 10 步 pipeline。
 	trackerMu    sync.RWMutex
 	trackerCache map[trackerCacheKey]trackerCacheEntry
+
+	// pendingHeatWords 跨窗口热词发现累积集合。
+	// collectHeatDiscoveredWords 是无状态的,每次请求只能看到当前窗口内的文章,
+	// 单窗口可能因文章池太小而发现不了某些词。把历史发现过但尚未转正的词保留在内存,
+	// 下次请求的 heatDiscovered 与之合并,让较小窗口也能把历史热词传入 clusterTrackerEvents。
+	pendingMu        sync.RWMutex
+	pendingHeatWords map[string]struct{}
 }
 
 // NewHandler 默认构造,不带订阅功能。
 func NewHandler(logger *slog.Logger, repo *Repository) *Handler {
 	return &Handler{
-		logger:       logger,
-		repo:         repo,
-		trackerCache: make(map[trackerCacheKey]trackerCacheEntry),
+		logger:           logger,
+		repo:             repo,
+		trackerCache:     make(map[trackerCacheKey]trackerCacheEntry),
+		pendingHeatWords: make(map[string]struct{}),
 	}
 }
 
@@ -57,6 +65,20 @@ func (h *Handler) WithSubscribe(repo *subscribe.Repository, notifyTo string) *Ha
 	h.subscribeRepo = repo
 	h.notifyTo = notifyTo
 	return h
+}
+
+// LoadPendingHeatWords 从 words 切片初始化 pendingHeatWords。
+// 在服务启动时调用(从 DB 加载尚未转正的热词候选),
+// 保证重启后跨窗口热词累积状态不丢失。
+func (h *Handler) LoadPendingHeatWords(words []string) {
+	if len(words) == 0 {
+		return
+	}
+	h.pendingMu.Lock()
+	defer h.pendingMu.Unlock()
+	for _, w := range words {
+		h.pendingHeatWords[w] = struct{}{}
+	}
 }
 
 func (h *Handler) Health(w http.ResponseWriter, _ *http.Request) {
@@ -227,6 +249,15 @@ func (h *Handler) ListTrackers(w http.ResponseWriter, r *http.Request) {
 
 	// 事件聚类:把共享实体的文章合并为事件组,提升首页信息密度。
 	heatDiscovered := collectHeatDiscoveredWords(articles)
+	// 跨窗口合并:把历史窗口发现过但尚未转正的词也带入当前聚类,
+	// 避免小窗口(3h/6h)文章池不足导致跨批次热词被遗漏。
+	h.pendingMu.RLock()
+	for word := range h.pendingHeatWords {
+		if !isBlacklisted(word) {
+			heatDiscovered[word] = struct{}{}
+		}
+	}
+	h.pendingMu.RUnlock()
 	// 构建 deltaByID 供 clusterTrackerEvents 计算事件 momentum。
 	deltaByID := make(map[int64]WindowDelta, len(deltas))
 	for _, d := range deltas {
@@ -547,6 +578,14 @@ func (h *Handler) persistHeatCandidates(discovered map[string]struct{}, articles
 		}
 	}
 
+	// 跨窗口累积:把本次发现的词加入 pendingHeatWords,让后续更小窗口的请求
+	// 也能感知到这些词(即使文章池较小、单独统计不过阈值)。
+	h.pendingMu.Lock()
+	for word := range discovered {
+		h.pendingHeatWords[word] = struct{}{}
+	}
+	h.pendingMu.Unlock()
+
 	// 检查并执行转正
 	promoted, err := h.repo.PromoteCandidates(ctx, promoteMinDays, promoteMinHits)
 	if err != nil {
@@ -558,9 +597,15 @@ func (h *Handler) persistHeatCandidates(discovered map[string]struct{}, articles
 		InjectPromotedWords(promoted)
 		// 转正后 promotedWordSet 已更新,旧缓存里 is_promoted / promoted_terms 字段已过期,
 		// 必须清缓存让下次请求重算,否则首页会在缓存有效期内持续显示蓝底(未入库)。
+		// 同时把已转正的词从 pendingHeatWords 移除,避免重复标注为"发现中"。
 		h.trackerMu.Lock()
 		h.trackerCache = map[trackerCacheKey]trackerCacheEntry{}
 		h.trackerMu.Unlock()
+		h.pendingMu.Lock()
+		for _, c := range promoted {
+			delete(h.pendingHeatWords, c.Word)
+		}
+		h.pendingMu.Unlock()
 		for _, c := range promoted {
 			h.logger.Info("heat candidate promoted",
 				"word", c.Word, "kind", c.Kind,
@@ -735,6 +780,11 @@ func (h *Handler) DeleteHeatWord(w http.ResponseWriter, r *http.Request) {
 
 	// 同步清除运行时词典(立即生效,不等重启)
 	RemovePromotedWord(word)
+
+	// 从跨窗口累积集合中移除(避免被再次合入 heatDiscovered)
+	h.pendingMu.Lock()
+	delete(h.pendingHeatWords, word)
+	h.pendingMu.Unlock()
 
 	// 清除 tracker 缓存,下次请求重算
 	h.trackerMu.Lock()
