@@ -794,3 +794,30 @@ func (h *Handler) DeleteHeatWord(w http.ResponseWriter, r *http.Request) {
 	h.logger.Info("heat word blacklisted", "word", word)
 	w.WriteHeader(http.StatusNoContent)
 }
+
+// ListHeatEvalReports 列出最近的热词发现算法评估报告。
+// GET /api/v1/heat-eval-reports?limit=20
+//
+// 用途:运维通过该接口观察"当前算法 vs 候选阈值"的指标趋势,
+// 判断是否要手动调整 collectHeatDiscoveredWords 的常数。
+// 不暴露给前端用户(无业务价值,纯调试用)。
+func (h *Handler) ListHeatEvalReports(w http.ResponseWriter, r *http.Request) {
+	limit := 20
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			limit = n
+		}
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+	reports, err := h.repo.ListHeatEvalReports(ctx, limit)
+	if err != nil {
+		h.logger.Error("list heat eval reports", "err", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"reports": reports,
+		"count":   len(reports),
+	})
+}

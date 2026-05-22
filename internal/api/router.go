@@ -41,6 +41,9 @@ func NewRouter(h *Handler) http.Handler {
 		// 热词黑名单管理
 		r.Get("/trackers/heat-words", h.ListHeatWords)
 		r.Delete("/trackers/heat-words/{word}", h.DeleteHeatWord)
+
+		// 热词发现算法评估报告(运维调试用)
+		r.Get("/heat-eval-reports", h.ListHeatEvalReports)
 	})
 
 	return r

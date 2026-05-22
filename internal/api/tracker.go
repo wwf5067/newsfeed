@@ -189,7 +189,7 @@ var (
 	// gse 常把品牌和型号切开;AhoCorasick 只能命中词典里精确注册的型号。
 	// 这里扫描原始标题,兜底所有"2-4字汉字+1大写字母+0-4位大写字母/数字"模式。
 	productModelRegex = regexp.MustCompile(`[\p{Han}]{2,4}[A-Z][A-Z0-9]{0,4}`)
-	stopTokens     = map[string]struct{}{
+	stopTokens        = map[string]struct{}{
 		"这个": {}, "那个": {}, "一个": {}, "一次": {}, "一些": {}, "一种": {},
 		"我们": {}, "你们": {}, "他们": {}, "大家": {}, "自己": {}, "别人": {},
 		"什么": {}, "哪些": {}, "怎么": {}, "如何": {}, "为什么": {}, "为何": {}, "为啥": {},
@@ -571,15 +571,60 @@ var (
 // 安全防线:stopTokens 排除 + 词典已覆盖的排除 + 长度范围限制。
 //
 // 性能:O(N*M) N=文章数 M=平均标题词数,对 500 篇文章 < 50ms,无压力。
+// HeatDiscoveryParams 热词发现的可调阈值。
+//
+// 抽出参数让评估框架(internal/api/heat_eval.go)能用不同组合
+// 模拟 collectHeatDiscoveredWords 行为,看哪组在最近数据上 precision/recall 更优。
+// 默认值由 DefaultHeatDiscoveryParams() 提供,跟原 collectHeatDiscoveredWords 行为完全一致。
+type HeatDiscoveryParams struct {
+	MinArticles     int // 至少出现在多少篇文章
+	MinSources      int // 至少跨多少个不同 source_key
+	MinHanLen       int // 最少汉字数
+	MaxHanLen       int // 最多汉字数(超过的走另一条 lookLikeTopicPhrase 路径)
+	MaxBigramHanLen int // bigram 合并允许的最大汉字长度
+}
+
+// DefaultHeatDiscoveryParams 当前 prod 在用的默认阈值,跟原函数硬编码常数一致。
+func DefaultHeatDiscoveryParams() HeatDiscoveryParams {
+	return HeatDiscoveryParams{
+		MinArticles:     2,
+		MinSources:      2,
+		MinHanLen:       2,
+		MaxHanLen:       4,
+		MaxBigramHanLen: 5,
+	}
+}
+
 func collectHeatDiscoveredWords(articles []model.Article) map[string]struct{} {
-	const (
-		minArticles = 2 // 至少出现在 2 篇不同文章中
-		minSources  = 2 // 至少出现在 2 个不同 source_key:防止单一爬虫源噪声升为候选
-		minHanLen   = 2 // 最少 2 个汉字
-		maxHanLen   = 4 // 最多 4 个汉字(超过的已能被 looksLikeTopicPhrase 保留)
-		// bigram 合并允许的最大汉字长度(放宽到 5,覆盖三字姓名+修饰)
-		maxBigramHanLen = 5
-	)
+	return collectHeatDiscoveredWordsWithParams(articles, DefaultHeatDiscoveryParams())
+}
+
+// collectHeatDiscoveredWordsWithParams 参数化版本,供评估框架使用。
+//
+// 原 collectHeatDiscoveredWords 等于 collectHeatDiscoveredWordsWithParams(articles, default)。
+//
+//nolint:gocyclo // 大段统计逻辑保持单函数可读性优于拆分
+func collectHeatDiscoveredWordsWithParams(articles []model.Article, p HeatDiscoveryParams) map[string]struct{} {
+	minArticles := p.MinArticles
+	minSources := p.MinSources
+	minHanLen := p.MinHanLen
+	maxHanLen := p.MaxHanLen
+	maxBigramHanLen := p.MaxBigramHanLen
+	if minArticles < 1 {
+		minArticles = 1
+	}
+	if minSources < 1 {
+		minSources = 1
+	}
+	if minHanLen < 1 {
+		minHanLen = 1
+	}
+	if maxHanLen < minHanLen {
+		maxHanLen = minHanLen
+	}
+	if maxBigramHanLen < maxHanLen {
+		maxBigramHanLen = maxHanLen
+	}
 
 	// word → 出现在哪些文章(按 article ID 去重)
 	wordArticles := make(map[string]map[int64]struct{})
@@ -2901,8 +2946,8 @@ func clusterTrackerEvents(articles []model.Article, heatDiscovered map[string]st
 			}
 		}
 
-		// entity 用加权 overlap:长复合词(≥3 字)信号比短词强,等价饱和到 2.0
-		// (即 1 个 4 字共享 == 1.0,2 个 2 字共享 == 1.0,介于两者之间是部分分)
+		// entity 用加权 overlap:长复合词(≥3 字)信号比短词强。
+		// saturateWeight=2.0:1个4字复合词即满分(=1.0),2个2字实体也满分。
 		entityOverlap := weightedOverlapRatio(signal.entities, 2.0)
 		keywordOverlap := overlapRatio(signal.keywords, 2)
 		timeProximity := timeProximityScore(metas[a].publishedAt, metas[b].publishedAt)
@@ -3262,22 +3307,23 @@ func overlapRatio(shared map[string]struct{}, saturateAt int) float64 {
 
 // weightedOverlapRatio 按字符长度加权的共享实体重合度。
 //
-// 设计动机:语义信号强度跟 label 长度强相关:
+// 设计动机:语义信号强度与 label 长度强相关:
 //   - "普京访华"(4 字复合词)共享 → 几乎确定是同一事件
 //   - "普京"(2 字短实体)共享 → 可能不同事件偶然提到同人
 //
-// 等权 overlapRatio 把两者一视同仁,实测在小窗口(3-6h)下,事件聚合
-// 跟"普京"这种短实体连边过多,导致大事件吞噬不相关文章 / 或者长复合
-// 词共现没被给到足够权重,小事件聚不起来。
+// 等权 overlapRatio 把两者一视同仁,实测在小窗口(3-6h)下短实体连边过多,
+// 导致大事件吞噬不相关文章;或长复合词共现没被给到足够权重,小事件聚不起来。
 //
-// 加权规则(线性加权,长复合词信号 ~2x):
-//   - len ≤ 2: weight = 1.0
-//   - len 3:   weight = 1.5
-//   - len 4:   weight = 2.0
-//   - len ≥ 5: weight = 2.5
+// 加权规则(线性,saturateWeight=2.0):
+//   - len ≤ 2: weight = 1.0 → 1个2字共享 = overlapRatio 下的 0.5
+//   - len 3:   weight = 1.5 → 1个3字共享 = 0.75
+//   - len 4:   weight = 2.0 → 1个4字共享 = 1.0(满分,可单独触发合并)
+//   - len ≥ 5: weight = 2.5 → 超长复合词同上,但早饱和
 //
-// saturateWeight 是饱和点(对应"等价 N 个 2 字 entity 共享后封顶到 1.0"),
-// 默认传 saturateAt × 1.0 即可,即 N 个等权实体或等价加权。
+// 与动态 pairLinkThreshold 配合:
+//
+//	≤3h 阈值 0.28:1个4字复合词(0.35)单独通过 → 确定同事件
+//	                1个2字短词(0.175)不通过 → 需要额外信号(title/keyword)
 func weightedOverlapRatio(shared map[string]struct{}, saturateWeight float64) float64 {
 	if len(shared) == 0 || saturateWeight <= 0 {
 		return 0

@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -777,6 +778,68 @@ func (r *Repository) ListPendingHeatCandidates(ctx context.Context, minHits int)
 			return nil, err
 		}
 		out = append(out, w)
+	}
+	return out, rows.Err()
+}
+
+// InsertHeatEvalReport 把评估报告写入 heat_eval_reports 表。
+// 失败时返回错误,调用方决定是否容错(评估 job 是 best-effort,失败不应影响主路径)。
+func (r *Repository) InsertHeatEvalReport(ctx context.Context, report HeatEvalReport) (int64, error) {
+	baselineJSON, err := EncodeHeatEvalRow(report.Baseline)
+	if err != nil {
+		return 0, fmt.Errorf("encode baseline: %w", err)
+	}
+	candidatesJSON, err := EncodeHeatEvalRows(report.Candidates)
+	if err != nil {
+		return 0, fmt.Errorf("encode candidates: %w", err)
+	}
+
+	const q = `
+INSERT INTO heat_eval_reports
+    (evaluated_at, window_hours, articles_count, blacklist_count,
+     baseline, candidates, best_variant, suggestion)
+VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7, $8)
+RETURNING id
+`
+	var id int64
+	err = r.pool.QueryRow(ctx, q,
+		report.EvaluatedAt, report.WindowHours, report.ArticlesCount,
+		report.BlacklistCount, baselineJSON, candidatesJSON,
+		report.BestVariant, report.Suggestion,
+	).Scan(&id)
+	return id, err
+}
+
+// ListHeatEvalReports 返回最近的评估报告(按时间倒序)。
+// 用于 GET /api/v1/heat-eval-reports 端点。
+func (r *Repository) ListHeatEvalReports(ctx context.Context, limit int) ([]HeatEvalReport, error) {
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+	const q = `
+SELECT evaluated_at, window_hours, articles_count, blacklist_count,
+       baseline, candidates, best_variant, suggestion
+FROM heat_eval_reports
+ORDER BY evaluated_at DESC
+LIMIT $1
+`
+	rows, err := r.pool.Query(ctx, q, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []HeatEvalReport
+	for rows.Next() {
+		var r HeatEvalReport
+		var baselineRaw, candidatesRaw []byte
+		if err := rows.Scan(&r.EvaluatedAt, &r.WindowHours, &r.ArticlesCount, &r.BlacklistCount,
+			&baselineRaw, &candidatesRaw, &r.BestVariant, &r.Suggestion); err != nil {
+			return nil, err
+		}
+		_ = json.Unmarshal(baselineRaw, &r.Baseline)
+		_ = json.Unmarshal(candidatesRaw, &r.Candidates)
+		out = append(out, r)
 	}
 	return out, rows.Err()
 }
