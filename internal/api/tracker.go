@@ -906,7 +906,8 @@ func isExcludedHeatWord(word string) bool {
 	// 一旦话题爆发就会大量出现在标题中,误触热词发现门槛但无追踪价值。
 	//
 	// 白名单词已在上方提前 return,不受本规则影响。
-	runes := len([]rune(word))
+	rs := []rune(word)
+	runes := len(rs)
 	if runes >= 2 {
 		trackerSegOnce.Do(loadTrackerSegmenter)
 		if trackerSegErr == nil {
@@ -918,6 +919,28 @@ func isExcludedHeatWord(word string) bool {
 					return true
 				case runes >= 4 && freq > longCharHeatFreqCutoff:
 					return true
+				}
+			}
+
+			// 4字纯汉字合成短语检测:若两个2字组成成分都是高频通用词(freq>1000),
+			// 则该词是动宾/动补等功能性短语,不是专名 → 排除。
+			// 例:"发现异常"(发现:24826, 异常:3360)、"报告显示"(均>1000)
+			// 安全验证:"量子计算"(量子:617 < 1000)→ 不排除 ✓
+			//           "文心一言"(文心:6 < 1000)→ 不排除 ✓
+			if runes == 4 {
+				allChinese := true
+				for _, r := range rs {
+					if !unicode.Is(unicode.Han, r) {
+						allChinese = false
+						break
+					}
+				}
+				if allChinese {
+					f1, _, ok1 := trackerSeg.Find(string(rs[:2]))
+					f2, _, ok2 := trackerSeg.Find(string(rs[2:]))
+					if ok1 && ok2 && f1 > 1000 && f2 > 1000 {
+						return true
+					}
 				}
 			}
 		}
@@ -952,8 +975,24 @@ func heatMinArticles(word string) int {
 	}
 	freq, _, ok := trackerSeg.Find(word)
 	if !ok {
-		// 不在 gse 词典 = 新词/品牌/专有名词强信号,降低门槛加速发现
-		return 1
+		// 不在 gse 词典 = 新词/品牌/专有名词强信号,降低门槛加速发现。
+		// 但仅对"纯 ASCII"或"纯汉字且字数 ≤ 4"的词生效:
+		//   - 混合 ASCII+汉字(AI率超/率超60%)通常是标题残骸碎片,不降门槛
+		//   - 纯汉字但 >4 字(到金项链朱自清散文)同样是过长碎片,不降门槛
+		rs2 := []rune(word)
+		allChinese2, allASCII2 := true, true
+		for _, r := range rs2 {
+			if !unicode.Is(unicode.Han, r) {
+				allChinese2 = false
+			}
+			if r >= 128 {
+				allASCII2 = false
+			}
+		}
+		if allASCII2 || (allChinese2 && len(rs2) <= 4) {
+			return 1
+		}
+		return 2
 	}
 	switch {
 	case freq <= 500:
