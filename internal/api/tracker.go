@@ -2,6 +2,7 @@ package api
 
 import (
 	"log/slog"
+	"math"
 	"regexp"
 	"sort"
 	"strconv"
@@ -183,8 +184,8 @@ var (
 	// gse 切词常把"方岱宁院士"切成 ["方岱宁", "院士"] 两段,前者 3 字汉字不命中
 	// 任何 entity 启发式,后者单字头衔被弱过滤丢。这里在切词前用正则把整段
 	// 拽出来作为 entity 强候选,让用户能看到"X院士"这种事件主体。
-	// 限制人名 2-4 字汉字以减少误命中(如"成功院士"中的"成功"不是人名)。
-	honorificRegex = regexp.MustCompile(`[\p{Han}]{2,4}(院士|教授|总裁|董事长|市长|省长|部长)`)
+	// 允许 1-5 字汉字人名:覆盖单字姓("李院士")和复合姓名("欧阳振华教授")。
+	honorificRegex = regexp.MustCompile(`[\p{Han}]{1,5}(院士|教授|总裁|董事长|市长|省长|部长)`)
 	// productModelRegex 提取"中文品牌+大写型号代码"复合词(小鹏GX / 小米YU7 / 蔚来ET5)。
 	// gse 常把品牌和型号切开;AhoCorasick 只能命中词典里精确注册的型号。
 	// 这里扫描原始标题,兜底所有"2-4字汉字+1大写字母+0-4位大写字母/数字"模式。
@@ -390,6 +391,13 @@ var (
 		"朝韩": {"朝鲜", "韩国"},
 		"印巴": {"印度", "巴基斯坦"},
 		"两岸": {"大陆", "台湾"},
+		// 补充高频缩写
+		"欧美": {"欧盟", "美国"},
+		"中印": {"中国", "印度"},
+		"中澳": {"中国", "澳大利亚"},
+		"以伊": {"以色列", "伊朗"},
+		"英美": {"英国", "美国"},
+		"美台": {"美国", "台湾"},
 	}
 
 	// visitSuffixToEntity 动词+地名缩写→目的地实体的映射。
@@ -2852,7 +2860,6 @@ func clusterTrackerEvents(articles []model.Article, heatDiscovered map[string]st
 
 	const titleCosineThreshold = 0.14
 	const titleCosineSparseResidualThreshold = 0.05
-	const titleCosineRawFallbackThreshold = 0.18
 	// pairLinkThreshold 动态适应窗口大小,配合 weightedOverlapRatio 使长复合词共享
 	// 即可触发合并 — 短词需 2+ 共享才能达标:
 	// 小窗口(≤3h)文章池小、共现稀疏,门槛放低以提高召回;
@@ -2869,15 +2876,36 @@ func clusterTrackerEvents(articles []model.Article, heatDiscovered map[string]st
 	const wEntity = 0.35
 	const wTitle = 0.35
 	const wKeyword = 0.15
-	// wTime ↓ 0.10→0.05, wSourceDiversity ↑ 0.05→0.10:
-	// 跨源多样性比发布时间差更能区分"真正不同话题的文章",提高权重后
-	// 单源刷屏文章不再被聚到同一事件,减少噪声聚合。总权重保持 1.0。
-	const wTime = 0.05
-	const wSourceDiversity = 0.10
+	// wTime ↑ 0.05→0.10, wSourceDiversity ↓ 0.10→0.05:
+	// 时间接近性(≤1h 内两篇文章同主题概率远高于 6h 后)比跨源多样性更能缩小假阳性,
+	// 恢复原始设计权重。总权重保持 1.0。
+	const wTime = 0.10
+	const wSourceDiversity = 0.05
 
 	titleVectors := make([]map[string]float64, len(metas))
 	for i, m := range metas {
 		titleVectors[i] = buildTitleTermVector(m.title)
+	}
+
+	// Corpus-level IDF 加权:在窗口内文章数 ≥5 时应用。
+	// 高频虚词(宣布/表示/最新)DF 接近 N → IDF 降权趋向 1.0;
+	// 低频实体(普京/特斯拉)DF 小 → IDF 大幅提权,余弦判别力更强。
+	// 公式: IDF = log(N / DF) + 1.0  (标准平滑 IDF,保证 DF=N 时权重 ≥1 而非 0)
+	// N<5 时样本太小跳过(对极低 DF 词过度放大会引入噪声)。
+	if len(titleVectors) >= 5 {
+		docFreq := make(map[string]int, 64)
+		for _, v := range titleVectors {
+			for term := range v {
+				docFreq[term]++
+			}
+		}
+		N := float64(len(titleVectors))
+		for i := range titleVectors {
+			for term, tf := range titleVectors[i] {
+				df := float64(docFreq[term])
+				titleVectors[i][term] = tf * (math.Log(N/df) + 1.0)
+			}
+		}
 	}
 
 	type pairSignal struct {
@@ -2935,15 +2963,15 @@ func clusterTrackerEvents(articles []model.Article, heatDiscovered map[string]st
 		scoreRaw := cosineSimilarity(titleVectors[a], titleVectors[b])
 		titleSemantic := scoreRaw
 		if hasSparseResidualSignal(titleVectors[a], titleVectors[b], signal.entities) {
-			// 去除共享实体与停用词后,若剩余有效词过少,
-			// 优先使用 raw 相似度,避免排除词后向量几乎为空导致漏合并。
+			// 去除共享实体后剩余有效词过少(≤1),向量近乎为空,
+			// 排除词后余弦不可靠 → 优先使用 raw 相似度,避免漏合并。
 			titleSemantic = scoreRaw
 		} else {
+			// 剩余词足够,用排除共享实体后的余弦评估"非实体部分"的内容相似度。
+			// 原意:避免两篇标题仅靠共享实体撑起来的高 raw 余弦,实际非实体内容无关。
+			// 不再 fallback 到 scoreRaw —— fallback 会将 scoreExcluded 设计意图架空。
 			scoreExcluded := cosineSimilarityExcludeTerms(titleVectors[a], titleVectors[b], signal.entities)
 			titleSemantic = scoreExcluded
-			if scoreRaw >= titleCosineRawFallbackThreshold {
-				titleSemantic = scoreRaw
-			}
 		}
 
 		// entity 用加权 overlap:长复合词(≥3 字)信号比短词强。
