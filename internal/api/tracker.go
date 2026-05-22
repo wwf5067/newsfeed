@@ -236,6 +236,10 @@ var (
 		"四具降落伞弹出": {}, "二三线降幅收窄": {},
 		// 比分赛事残骸
 		"0 AL": {}, "AL": {}, "项目六人大名单": {},
+		// 通用人物/名词:单独成词时无指向性,会大量污染候选池
+		"男子": {}, "女子": {}, "男孩": {}, "女孩": {},
+		"画面": {}, "信息": {}, "名单": {}, "事件": {},
+		"将迎": {}, "大咖": {},
 	}
 	entitySuffixes = []string{
 		"公司", "集团", "大学", "医院", "银行", "汽车", "平台", "手机", "芯片", "模型",
@@ -339,7 +343,7 @@ var (
 		// 医疗/民生:单独出现时是高价值话题词,不能被 weak 过滤
 		"医保",
 	}
-	trackerTrimPrefixes = []string{"关于", "有关", "对于", "因为", "因", "就", "将", "把", "被", "让", "请问", "如何看待", "如何评价", "为什么", "怎么评价", "怎么看", "最新", "突发", "热议", "围观"}
+	trackerTrimPrefixes = []string{"关于", "有关", "对于", "因为", "因", "就", "将", "把", "被", "让", "的", "请问", "如何看待", "如何评价", "为什么", "怎么评价", "怎么看", "最新", "突发", "热议", "围观"}
 	trackerTrimSuffixes = []string{
 		"怎么回事", "是真的吗", "意味着什么", "说了什么", "最新回应", "回应",
 		"发布", "表示", "来了", "出炉", "曝光", "完整版", "完整版视频", "视频",
@@ -362,6 +366,8 @@ var (
 		// 知乎热榜疑问尾缀补充
 		"什么原因", "什么情况", "合理吗", "你认同吗",
 		"能走多远", "出路在哪", "在哪里",
+		// 单字动词/助词尾缀:防止 gse 把"空间站将"/"李在明说" 整体切出
+		"将", "在", "说", "让", "与", "的",
 	}
 
 	// compoundGeoAbbrevs 2字合称→两个实体的拆解。
@@ -1679,7 +1685,7 @@ func isTrackerASCIIWordRune(r rune) bool {
 
 func normalizeTrackerToken(token string) string {
 	token = strings.TrimSpace(token)
-	token = strings.Trim(token, "#.,!?:;，。！？：；（）()[]【】《》\"'“”‘’·-")
+	token = strings.Trim(token, "#.,!?:;，。！？：；（）()[]【】《》\"'“”‘’·-、")
 	token = strings.TrimPrefix(token, "#")
 	token = strings.TrimSuffix(token, "#")
 	token = compactTrackerSpaces(token)
@@ -1701,7 +1707,7 @@ func normalizeTrackerToken(token string) string {
 				changed = true
 			}
 		}
-		token = strings.Trim(token, "#.,!?:;，。！？：；（）()[]【】《》\"'“”‘’·-")
+		token = strings.Trim(token, "#.,!?:;，。！？：；（）()[]【】《》\"'“”‘’·-、")
 	}
 
 	if token == "" {
@@ -1721,6 +1727,11 @@ func normalizeTrackerToken(token string) string {
 		return ""
 	}
 	if isAllDigits(token) {
+		return ""
+	}
+	// 首字符为数字的 token 一律拒绝(如 "11省区市" "3.6级地震"),
+	// isAllDigits 只过滤纯数字,这里补漏混合开头情形。
+	if r := []rune(token); len(r) > 0 && unicode.IsDigit(r[0]) {
 		return ""
 	}
 	if looksLikeNumericMeasure(token) {
@@ -2890,7 +2901,18 @@ func clusterTrackerEvents(articles []model.Article, heatDiscovered map[string]st
 				entities = append(entities, e)
 			}
 		}
-		sort.Strings(entities)
+		// 词典实体优先,同级按字典序;上限 12 条避免卡片过载
+		sort.Slice(entities, func(i, j int) bool {
+			_, iLex := trackerEntityLabelSet[entities[i]]
+			_, jLex := trackerEntityLabelSet[entities[j]]
+			if iLex != jLex {
+				return iLex
+			}
+			return entities[i] < entities[j]
+		})
+		if len(entities) > 12 {
+			entities = entities[:12]
+		}
 		keywords := make([]string, 0, len(keywordSet))
 		for k := range keywordSet {
 			if !isBlacklisted(k) {
@@ -2898,6 +2920,9 @@ func clusterTrackerEvents(articles []model.Article, heatDiscovered map[string]st
 			}
 		}
 		sort.Strings(keywords)
+		if len(keywords) > 12 {
+			keywords = keywords[:12]
+		}
 
 		// 组内文章:3h 窗口按发布时间降序,其余按热度降序。
 		// 前端默认展示前 3 条,支持展开全部。
