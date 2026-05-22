@@ -245,6 +245,23 @@ var (
 		"男子": {}, "女子": {}, "男孩": {}, "女孩": {},
 		"画面": {}, "信息": {}, "名单": {}, "事件": {},
 		"将迎": {}, "大咖": {},
+		// 媒体元词 — 与"热榜"/"热门"同类,之前未收录
+		"热搜": {}, "词条": {}, "热词": {},
+		// 消息 — 已在 clusterSimilarityStopwords,同步加入 stopTokens 保证 heat 发现也过滤
+		"消息": {},
+		// 人物角色泛称 — 不具追踪价值,事件主体应为具体人名/机构名
+		"当事人": {}, "受害者": {}, "嫌疑人": {}, "遇难者": {},
+		"市民": {}, "居民": {},
+		// 时间修饰词 — 与"今天"/"昨天"同类
+		"当天": {}, "当日": {}, "当晚": {}, "近日": {},
+		// 数量修饰词 — 与"多人"同类
+		"多名": {}, "一名": {}, "数名": {},
+		// 事件类型泛称 — 太宽泛,不具追踪价值
+		"案件": {}, "事故": {}, "纠纷": {}, "风波": {},
+		// 场景/时点词 — 在标题中极常见但指向性为零
+		"事发": {},
+		// 机构泛称复合词 — 单独成词无指向性
+		"相关部门": {},
 	}
 	entitySuffixes = []string{
 		"公司", "集团", "大学", "医院", "银行", "汽车", "平台", "手机", "芯片", "模型",
@@ -792,12 +809,28 @@ func collectHeatDiscoveredWordsWithParams(articles []model.Article, p HeatDiscov
 	return result
 }
 
-// isExcludedHeatWord 判断一个词是否应被热词发现排除。
+// heatFreqCutoffs 按字长的热词发现 gse 词典频率截断值(硬过滤)。
 //
-// 自动泛化词过滤:利用 gse 词典词频作为"通用度"指标。
-// 词频 > heatFreqThreshold 的词属于日常高频用词(如"朋友""合作""数据"),
-// 在热搜标题中虽然跨文章高频,但本身没有话题追踪价值。
-// 词频 ≤ 阈值或不在词典中的词(如"武契奇""智商税""段永平")则是有信息量的。
+// 根据双样本分析(黑名单代表词 vs 转正好词,来自 live API /trackers/heat-words):
+//   - BAD 词(通报/声明/报道/专家/调查...) gseFreq: n=22, avg=7749, p50=3601, max=55563
+//   - GOOD 词(鸿蒙/DeepSeek/摆烂/问界...) gseFreq: n=19, avg=44,   p50=0,    max=510
+//   - 100% BAD 词在 gse 词典中;47% GOOD 词不在 gse 词典(→ 不在词典 = 新词强信号)
+//
+// 按字长分级截断:
+//   2字:freq > 200  — T=200 无误伤最低截断(天问 freq=109,保留)
+//   3字:freq > 400  — 分析: BAD 3字词 p50≈2000; GOOD 3字词 p90=100
+//   4字+:freq > 300 — 4+字词的 BAD/GOOD 分界更低,保守取 300
+//
+// 白名单(trackerEntityLabelSet/strongGeoNames/strongVerbs/strongTopicNouns)
+// 中的词已在调用前返回,不受本规则影响。
+const (
+	twoCharHeatFreqCutoff   = 200 // 2字词截断
+	threeCharHeatFreqCutoff = 400 // 3字词截断
+	longCharHeatFreqCutoff  = 300 // 4字+词截断
+)
+
+// heatFreqThreshold 已弃用(保留作文档注释)。
+// 原来打算作为 isExcludedHeatWord 的硬截断,现已改为按字长区分动态阈值。
 const heatFreqThreshold = 2000
 
 func isExcludedHeatWord(word string) bool {
@@ -822,6 +855,29 @@ func isExcludedHeatWord(word string) bool {
 	if isAllDigits(word) || looksLikeNumericMeasure(word) {
 		return true
 	}
+	// 按字长的高频词硬过滤。
+	//
+	// 原理:真正有价值的新词(鸿蒙/星舰/摆烂/DeepSeek)要么不在 gse 词典,
+	// 要么词频极低。高频泛化词(通报/声明/报道/专家/工作人员/相关部门…)
+	// 一旦话题爆发就会大量出现在标题中,误触热词发现门槛但无追踪价值。
+	//
+	// 白名单词已在上方提前 return,不受本规则影响。
+	runes := len([]rune(word))
+	if runes >= 2 {
+		trackerSegOnce.Do(loadTrackerSegmenter)
+		if trackerSegErr == nil {
+			if freq, _, ok := trackerSeg.Find(word); ok {
+				switch {
+				case runes == 2 && freq > twoCharHeatFreqCutoff:
+					return true
+				case runes == 3 && freq > threeCharHeatFreqCutoff:
+					return true
+				case runes >= 4 && freq > longCharHeatFreqCutoff:
+					return true
+				}
+			}
+		}
+	}
 	return false
 }
 
@@ -832,26 +888,41 @@ func isExcludedHeatWord(word string) bool {
 // 通过提高常见词的 minArticles 阈值来代替之前的硬截断(freq > 2000 直接排除),
 // 让高频词在真实爆发时仍然能被发现,而非永久屏蔽。
 //
-//	freq ≤ 500  → minArticles = 2  (稀有词/新词:少量命中即有价值)
-//	501-2000   → minArticles = 3
-//	2001-5000  → minArticles = 4  ("红包"大约在这个区间)
-//	> 5000     → minArticles = 8  (极通用词:需要大规模爆发才入选)
+// 基于 live API 双样本分析(BAD词 vs GOOD词)更新的分级:
+//
+//	不在 gse 词典    → minArticles = 1  (新词/品牌/专有名词:第一次大量出现就值得追踪)
+//	freq ≤ 500       → minArticles = 2  (稀有词:少量命中即有价值)
+//	501-2000         → minArticles = 3
+//	2001-5000        → minArticles = 4  ("红包"大约在这个区间)
+//	5001-8000        → minArticles = 8  (高频通用词:需要明显爆发才入选)
+//	> 8000           → minArticles = 12 (超高频泛化词:极少有真正的话题价值,
+//	                                      需要极大规模爆发才入选;BAD词中约1/3落在此区间)
+//
+// 注:"不在词典"是新词/品牌的强正信号:47% GOOD 词不在 gse 词典,0% BAD 词不在词典。
+// 门槛降到 1 意味着"只要出现在 ≥1 篇文章就触发候选",配合 minSources ≥ 2
+// 和 isExcludedHeatWord 的质量门控,误伤风险可控。
 func heatMinArticles(word string) int {
 	trackerSegOnce.Do(loadTrackerSegmenter)
 	if trackerSegErr != nil {
 		return 2
 	}
 	freq, _, ok := trackerSeg.Find(word)
-	if !ok || freq <= 500 {
+	if !ok {
+		// 不在 gse 词典 = 新词/品牌/专有名词强信号,降低门槛加速发现
+		return 1
+	}
+	switch {
+	case freq <= 500:
 		return 2
-	}
-	if freq <= 2000 {
+	case freq <= 2000:
 		return 3
-	}
-	if freq <= 5000 {
+	case freq <= 5000:
 		return 4
+	case freq <= 8000:
+		return 8
+	default:
+		return 12
 	}
-	return 8
 }
 
 // topicFreqThreshold 话题级泛化词阈值。
@@ -3302,6 +3373,21 @@ var clusterSimilarityStopwords = map[string]struct{}{
 	"最新": {},
 	"今天": {},
 	"今日": {},
+	// 场景/时点词
+	"当地": {}, "现场": {}, "事发": {},
+	"当天": {}, "当日": {}, "当晚": {},
+	"据称": {}, "据悉": {},
+	// 数量修饰词
+	"多名": {}, "一名": {},
+	// 事件类型泛称
+	"案件": {}, "事故": {},
+	// 新增:2字高频泛化词(与 isExcludedHeatWord 2-char freq 规则覆盖同类)
+	// 这些词在标题 TF-IDF 向量里权重高但不区分话题,应从相似度计算中排除。
+	"通报": {}, "声明": {}, "报道": {},
+	"专家": {}, "平台": {}, "部门": {},
+	"调查": {}, "救援": {}, "处置": {}, "质疑": {},
+	// 机构/动作泛称
+	"当局": {}, "涉事": {},
 }
 
 func hasSparseResidualSignal(a, b map[string]float64, excluded map[string]struct{}) bool {

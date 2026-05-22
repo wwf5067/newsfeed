@@ -195,8 +195,8 @@ func TestExtractTrackerCandidates(t *testing.T) {
 		{
 			title:        "广州地铁11号线发生脱轨事故",
 			wantEntities: []string{"广州"},
-			wantKeywords: []string{"事故"},
-			wantAbsent:   []string{"发生"},
+			wantKeywords: []string{}, // "事故"已加入stopTokens:泛称事件类型,无追踪价值
+			wantAbsent:   []string{"发生", "事故"},
 		},
 		{
 			title:        "某知名主播被曝偷税漏税",
