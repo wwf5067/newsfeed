@@ -176,7 +176,7 @@ func (r *Runner) runOnce(s Source) {
 	//   12:00-18:00 每 20 分钟执行(约 3/4 的 tick 跑)→ 简化为隔一次跳过:00 和 :30 执行,:15 和 :45 跳过
 	//   18:00-24:00 每 30 分钟执行(隔一次)
 	//   0:00-9:00   每 60 分钟执行(4 次 tick 跑 1 次)
-	if !r.shouldRunThisTick(s.Key()) {
+	if !r.shouldRunThisTick() {
 		return
 	}
 
@@ -323,37 +323,21 @@ func (r *Runner) runDailySummaryJob() {
 	}
 }
 
-// sourceLabels 把 source_key 转成展示名;未知源回落原 key。
-var sourceLabels = map[string]string{
-	"zhihu_hot":        "知乎",
-	"bilibili_popular": "B 站",
-	"baidu_hot":        "百度",
-	"weibo_hot":        "微博",
-	"sogou_hot":        "搜狗",
+// sourceMeta 聚合同一源的所有元数据,避免 4 个 key 相同的 map 分散维护。
+type sourceMeta struct {
+	Label              string // 展示名,如"知乎"
+	MetricNoun         string // 最热指标名,如"最热""热搜"
+	Icon               string // 公告前缀图标
+	ExcludeFromSummary bool   // 是否从今日摘要中排除
 }
 
-// sourceMetricNoun 不同源的"最热"指标名(避免拿"播放量"和"热度"做心理换算)。
-var sourceMetricNoun = map[string]string{
-	"zhihu_hot":        "最热",
-	"bilibili_popular": "最高",
-	"baidu_hot":        "热搜",
-	"weibo_hot":        "最热",
-	"sogou_hot":        "热搜",
-}
-
-// sourceIcons 不同源在公告栏中的前缀图标,让每行一眼可辨来源。
-var sourceIcons = map[string]string{
-	"zhihu_hot":        "🔥",
-	"bilibili_popular": "▶️",
-	"baidu_hot":        "🔍",
-	"weibo_hot":        "📢",
-	"sogou_hot":        "🔎",
-}
-
-// summaryExcludedSources 列出不在公告摘要里展示的数据源。
-// B 站内容以娱乐视频为主,与新闻聚合场景不符,从公告中移除。
-var summaryExcludedSources = map[string]bool{
-	"bilibili_popular": true,
+// sourceMetas 索引全部数据源元数据。新增源只需在此处维护,无需同步修改多处。
+var sourceMetas = map[string]sourceMeta{
+	"zhihu_hot":        {Label: "知乎", MetricNoun: "最热", Icon: "🔥", ExcludeFromSummary: false},
+	"bilibili_popular": {Label: "B 站", MetricNoun: "最高", Icon: "▶️", ExcludeFromSummary: true},
+	"baidu_hot":        {Label: "百度", MetricNoun: "热搜", Icon: "🔍", ExcludeFromSummary: false},
+	"weibo_hot":        {Label: "微博", MetricNoun: "最热", Icon: "📢", ExcludeFromSummary: false},
+	"sogou_hot":        {Label: "搜狗", MetricNoun: "热搜", Icon: "🔎", ExcludeFromSummary: false},
 }
 
 // buildSummaryContent 拼装摘要文本。stats 为空返回空串,调用方负责跳过。
@@ -373,7 +357,7 @@ func buildSummaryContent(stats []SourceStat) string {
 	// 过滤掉不展示的源
 	filtered := make([]SourceStat, 0, len(stats))
 	for _, s := range stats {
-		if !summaryExcludedSources[s.SourceKey] {
+		if !sourceMetas[s.SourceKey].ExcludeFromSummary {
 			filtered = append(filtered, s)
 		}
 	}
@@ -392,7 +376,7 @@ func buildSummaryContent(stats []SourceStat) string {
 	if len(filtered) > 1 {
 		breakdown := make([]string, 0, len(filtered))
 		for _, s := range filtered {
-			label := sourceLabels[s.SourceKey]
+			label := sourceMetas[s.SourceKey].Label
 			if label == "" {
 				label = s.SourceKey
 			}
@@ -407,15 +391,15 @@ func buildSummaryContent(stats []SourceStat) string {
 		if s.TopTitle == "" {
 			continue
 		}
-		label := sourceLabels[s.SourceKey]
+		label := sourceMetas[s.SourceKey].Label
 		if label == "" {
 			label = s.SourceKey
 		}
-		icon := sourceIcons[s.SourceKey]
+		icon := sourceMetas[s.SourceKey].Icon
 		if icon == "" {
 			icon = "📰"
 		}
-		metric := sourceMetricNoun[s.SourceKey]
+		metric := sourceMetas[s.SourceKey].MetricNoun
 		if metric == "" {
 			metric = "最热"
 		}
@@ -455,7 +439,7 @@ func (r *Runner) runDigestJob() {
 //	00:00-09:00 → 每 30 分钟(凌晨低频但不至于漏国际新闻)
 //
 // 每日预估请求量: 每源 15*4 + 9*2 = 78 次,对免费 API 无压力。
-func (r *Runner) shouldRunThisTick(sourceKey string) bool {
+func (r *Runner) shouldRunThisTick() bool {
 	now := time.Now()
 	hour := now.Hour()
 	minute := now.Minute()

@@ -39,7 +39,7 @@ services:
     command:
       - "-path=/migrations"
       - "-database"
-      - "postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable"
+      - "postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=prefer&connect_timeout=10"
       - "up"
     volumes:
       - ./migrations:/migrations:ro
@@ -54,7 +54,7 @@ services:
     environment:
       APP_ENV: prod
       LOG_LEVEL: info
-      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=prefer&connect_timeout=10
       API_ADDR: ":8080"
     depends_on:
       postgres:
@@ -66,7 +66,7 @@ services:
     environment:
       APP_ENV: prod
       LOG_LEVEL: info
-      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=prefer&connect_timeout=10
       CRAWLER_ADDR: "127.0.0.1:8081"
       ZHIHU_COOKIE: ${ZHIHU_COOKIE}
       ZHIHU_SCHEDULE: ${ZHIHU_SCHEDULE:-0 */30 * * * *}
@@ -95,7 +95,7 @@ services:
       SMTP_PASS: ${SMTP_PASS:-}
       SMTP_FROM: ${SMTP_FROM:-}
       DIGEST_TO: ${DIGEST_TO:-}
-      SITE_URL: ${SITE_URL:-http://82.156.10.221}
+      SITE_URL: ${SITE_URL:?SITE_URL must be set in .env}
     depends_on:
       postgres:
         condition: service_healthy
@@ -106,7 +106,7 @@ services:
     environment:
       APP_ENV: prod
       LOG_LEVEL: info
-      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=prefer&connect_timeout=10
       EXTRACTOR_ADDR: "127.0.0.1:8082"
       EXTRACTOR_BACKEND: ${EXTRACTOR_BACKEND:-rule}
       EXTRACTOR_SCHEDULE: ${EXTRACTOR_SCHEDULE:-0 */5 * * * *}

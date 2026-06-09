@@ -30,3 +30,11 @@ coverage.out
 # 部署本地产物(只在 CI / 服务器上需要)
 deploy/web-dist/
 deploy/migrations
+
+# 根目录编译产物(go build 直接输出到根目录时)
+/api
+/crawler
+/extractor
+
+# 前端构建产物
+/dist/

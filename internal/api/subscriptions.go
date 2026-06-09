@@ -45,7 +45,7 @@ func (h *Handler) AddSubscription(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Keyword string `json:"keyword"`
 	}
-	if err := decodeJSON(r, &body); err != nil {
+	if err := decodeJSON(w, r, &body); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
 		return
 	}

@@ -435,8 +435,8 @@ func writeJSON(w http.ResponseWriter, status int, body any) {
 }
 
 // decodeJSON 限制 body 大小到 64KB,防止异常 payload 撑爆内存。
-func decodeJSON(r *http.Request, dst any) error {
-	r.Body = http.MaxBytesReader(nil, r.Body, 64*1024)
+func decodeJSON(w http.ResponseWriter, r *http.Request, dst any) error {
+	r.Body = http.MaxBytesReader(w, r.Body, 64*1024)
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
 	return dec.Decode(dst)
@@ -501,47 +501,42 @@ func (h *Handler) GetHotlist(w http.ResponseWriter, r *http.Request) {
 		top = 15
 	}
 
-	zhihu, err := h.repo.ListHotlistItems(r.Context(), "zhihu_hot", top)
-	if err != nil {
-		h.logger.Error("hotlist zhihu", "err", err)
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
-		return
+	type result struct {
+		key   string
+		items []HotlistItem
+		err   error
 	}
-	baidu, err := h.repo.ListHotlistItems(r.Context(), "baidu_hot", top)
-	if err != nil {
-		h.logger.Error("hotlist baidu", "err", err)
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
-		return
+
+	sources := []string{"zhihu_hot", "baidu_hot", "weibo_hot", "sogou_hot"}
+	resultCh := make(chan result, len(sources))
+
+	for _, src := range sources {
+		src := src
+		go func() {
+			items, err := h.repo.ListHotlistItems(r.Context(), src, top)
+			resultCh <- result{key: src, items: items, err: err}
+		}()
 	}
-	weibo, err := h.repo.ListHotlistItems(r.Context(), "weibo_hot", top)
-	if err != nil {
-		h.logger.Error("hotlist weibo", "err", err)
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
-		return
+
+	results := make(map[string][]HotlistItem, len(sources))
+	for range sources {
+		res := <-resultCh
+		if res.err != nil {
+			h.logger.Error("hotlist "+res.key, "err", res.err)
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
+			return
+		}
+		if res.items == nil {
+			res.items = []HotlistItem{}
+		}
+		results[res.key] = res.items
 	}
-	sogou, err := h.repo.ListHotlistItems(r.Context(), "sogou_hot", top)
-	if err != nil {
-		h.logger.Error("hotlist sogou", "err", err)
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
-		return
-	}
-	if zhihu == nil {
-		zhihu = []HotlistItem{}
-	}
-	if baidu == nil {
-		baidu = []HotlistItem{}
-	}
-	if weibo == nil {
-		weibo = []HotlistItem{}
-	}
-	if sogou == nil {
-		sogou = []HotlistItem{}
-	}
+
 	writeJSON(w, http.StatusOK, map[string]any{
-		"zhihu": zhihu,
-		"baidu": baidu,
-		"weibo": weibo,
-		"sogou": sogou,
+		"zhihu": results["zhihu_hot"],
+		"baidu": results["baidu_hot"],
+		"weibo": results["weibo_hot"],
+		"sogou": results["sogou_hot"],
 	})
 }
 
